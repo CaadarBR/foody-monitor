@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#0f172a">
+  <title>Foody Monitor</title>
+  <link rel="manifest" href="/manifest.json">
+  <style>
+    :root {
+      --bg: #0f172a;
+      --surface: #1e293b;
+      --border: #334155;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --green: #22c55e;
+      --blue: #3b82f6;
+      --yellow: #f59e0b;
+      --red: #ef4444;
+      --orange: #f97316;
+      --brand: #ff6b35;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      min-height: 100vh;
+    }
+
+    /* ── Header ── */
+    .header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .logo { font-size: 18px; font-weight: 700; color: var(--brand); }
+
+    .header-right { display: flex; align-items: center; gap: 12px; }
+
+    .status-dot {
+      width: 9px; height: 9px;
+      border-radius: 50%;
+      background: var(--muted);
+      flex-shrink: 0;
+    }
+    .status-dot.ok { background: var(--green); animation: pulse 2s infinite; }
+    .status-dot.error { background: var(--red); }
+
+    .refresh-text { font-size: 12px; color: var(--muted); }
+
+    .btn-icon {
+      background: var(--border);
+      border: none;
+      color: var(--text);
+      width: 36px; height: 36px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 16px;
+      display: flex; align-items: center; justify-content: center;
+    }
+
+    /* ── Main ── */
+    .main { padding: 14px; max-width: 1200px; margin: 0 auto; }
+
+    /* ── Banners ── */
+    .banner {
+      border-radius: 10px;
+      padding: 11px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 12px;
+      font-size: 13px;
+    }
+    .banner-blue { background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.3); }
+    .banner-red  { background: rgba(239,68,68,0.12);  border: 1px solid rgba(239,68,68,0.4); }
+
+    .btn-sm {
+      padding: 6px 14px;
+      border-radius: 7px;
+      border: none;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .btn-primary { background: var(--brand); color: #fff; }
+    .btn-outline { background: transparent; color: var(--red); border: 1px solid var(--red); }
+
+    /* ── Section title ── */
+    .section-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--muted);
+      margin: 16px 0 8px;
+    }
+
+    /* ── Alerts ── */
+    .alerts-list { display: flex; flex-direction: column; gap: 7px; }
+
+    .alert-card {
+      border-radius: 10px;
+      padding: 11px 14px;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      animation: slideIn 0.25s ease;
+    }
+    .alert-card.danger { background: #3b0a0a; border: 1px solid rgba(239,68,68,0.5); }
+    .alert-card.warn   { background: #3b1f0a; border: 1px solid rgba(249,115,22,0.5); }
+
+    .alert-icon  { font-size: 18px; margin-top: 1px; flex-shrink: 0; }
+    .alert-body  { flex: 1; }
+    .alert-msg   { font-size: 13px; font-weight: 600; line-height: 1.4; }
+    .alert-time  { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+    .btn-dismiss {
+      background: none; border: none; color: var(--muted);
+      font-size: 16px; cursor: pointer; padding: 0 2px; flex-shrink: 0;
+    }
+
+    /* ── Courier grid ── */
+    .couriers-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 11px;
+    }
+
+    /* ── Courier card ── */
+    .courier-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--border);
+      border-radius: 12px;
+      padding: 15px;
+      transition: border-color 0.3s;
+    }
+    .courier-card.delivering { border-left-color: var(--blue); }
+    .courier-card.available  { border-left-color: var(--green); }
+    .courier-card.warning    { border-left-color: var(--yellow); }
+    .courier-card.alert      { border-left-color: var(--red); animation: borderBlink 0.8s infinite; }
+    .courier-card.missing    { border-left-color: var(--red); opacity: 0.75; }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .courier-name { font-size: 15px; font-weight: 700; }
+    .courier-vehicle { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+    .badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 3px 9px;
+      border-radius: 20px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .badge-delivering { background: rgba(59,130,246,0.18);  color: #93c5fd; }
+    .badge-available  { background: rgba(34,197,94,0.18);   color: #86efac; }
+    .badge-warning    { background: rgba(245,158,11,0.18);  color: #fcd34d; }
+    .badge-alert      { background: rgba(239,68,68,0.18);   color: #fca5a5; }
+    .badge-missing    { background: rgba(239,68,68,0.10);   color: #f87171; }
+
+    .timer-block { text-align: center; padding: 8px 0 4px; }
+
+    .timer {
+      font-size: 26px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 1px;
+    }
+    .timer.blue   { color: #60a5fa; }
+    .timer.green  { color: var(--green); }
+    .timer.yellow { color: var(--yellow); }
+    .timer.red    { color: var(--red); }
+    .timer.muted  { color: var(--muted); }
+
+    .timer-label {
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-top: 2px;
+    }
+
+    .card-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    /* ── Empty state ── */
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--muted);
+      grid-column: 1 / -1;
+    }
+    .empty-state .icon { font-size: 44px; margin-bottom: 12px; }
+    .empty-state p { font-size: 14px; }
+
+    /* ── Modal ── */
+    .modal-overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.75);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .modal-overlay.open { display: flex; }
+
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 22px;
+      width: 100%;
+      max-width: 460px;
+    }
+
+    .modal-title { font-size: 17px; font-weight: 700; margin-bottom: 18px; }
+
+    .form-group { margin-bottom: 16px; }
+    .form-label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+
+    textarea, input[type="number"] {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 10px 12px;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    textarea { font-family: monospace; resize: vertical; min-height: 90px; }
+    textarea:focus, input:focus { border-color: var(--brand); }
+
+    .help-box {
+      background: rgba(255,255,255,0.04);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.7;
+      margin-top: 8px;
+    }
+    .help-box b { color: var(--text); }
+
+    .modal-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+      margin-top: 20px;
+    }
+
+    .btn { padding: 10px 20px; border-radius: 8px; border: none; cursor: pointer; font-size: 14px; font-weight: 600; }
+    .btn-secondary { background: var(--border); color: var(--text); }
+
+    /* ── Animations ── */
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    @keyframes borderBlink {
+      0%, 100% { border-left-color: var(--red); }
+      50% { border-left-color: transparent; }
+    }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    @media (max-width: 420px) {
+      .couriers-grid { grid-template-columns: 1fr; }
+      .logo { font-size: 16px; }
+    }
+
+    /* ── Log Modal ── */
+    .log-modal { max-width: 600px; max-height: 82vh; display: flex; flex-direction: column; }
+    .log-modal-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+    .log-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+    .log-date-sel {
+      background: var(--bg); border: 1px solid var(--border);
+      color: var(--text); padding: 5px 10px; border-radius: 7px; font-size: 12px; flex: 1;
+    }
+    .log-filter-btn {
+      padding: 5px 13px; border-radius: 20px; border: 1px solid var(--border);
+      background: none; color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap;
+    }
+    .log-filter-btn.active { background: var(--brand); color: #fff; border-color: var(--brand); }
+    .log-entries { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; }
+    .log-entry {
+      display: grid; grid-template-columns: 68px 22px 1fr;
+      gap: 8px; align-items: baseline; padding: 7px 10px; border-radius: 7px; font-size: 12.5px;
+    }
+    .log-time { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11.5px; }
+    .log-session { background: rgba(255,255,255,0.04); }
+    .log-info    { background: rgba(59,130,246,0.09); }
+    .log-success { background: rgba(34,197,94,0.09); }
+    .log-warn    { background: rgba(245,158,11,0.11); }
+    .log-danger  { background: rgba(239,68,68,0.11); }
+    .log-empty   { text-align: center; padding: 48px 20px; color: var(--muted); font-size: 13px; }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header class="header">
+  <div style="display:flex;align-items:center;gap:8px;">
+    <span class="logo">🍕 Foody Monitor</span>
+    <span class="status-dot" id="statusDot"></span>
+  </div>
+  <div class="header-right">
+    <span class="refresh-text" id="refreshText">–</span>
+    <button class="btn-icon" onclick="forceRefresh()" title="Atualizar agora">🔄</button>
+    <button class="btn-icon" onclick="openLog()" title="Histórico do turno">📋</button>
+    <button class="btn-icon" onclick="openSettings()" title="Configurações">⚙️</button>
+  </div>
+</header>
+
+<!-- ── Main ── -->
+<main class="main">
+
+  <!-- Notification banner -->
+  <div class="banner banner-blue" id="notifBanner" style="display:none;">
+    <span>🔔 Ativar notificações para receber alertas sonoros?</span>
+    <button class="btn-sm btn-primary" onclick="requestNotif()">Ativar</button>
+  </div>
+
+  <!-- Session expired banner -->
+  <div class="banner banner-red" id="sessionBanner" style="display:none;">
+    <span>🔑 Sessão expirada — atualize o cookie nas configurações</span>
+    <button class="btn-sm btn-outline" onclick="openSettings()">Atualizar</button>
+  </div>
+
+  <!-- Alerts -->
+  <div id="alertsSection" style="display:none;">
+    <div class="section-title">⚠️ Alertas</div>
+    <div class="alerts-list" id="alertsList"></div>
+  </div>
+
+  <!-- Couriers -->
+  <div style="display:flex;align-items:center;justify-content:space-between;margin:16px 0 8px;">
+    <div class="section-title" style="margin:0;">🏍️ Entregadores</div>
+    <span id="readyBadge" style="display:none;font-size:12px;font-weight:700;background:rgba(168,85,247,0.2);color:#d8b4fe;border:1px solid rgba(168,85,247,0.4);padding:3px 10px;border-radius:20px;"></span>
+  </div>
+  <div class="couriers-grid" id="couriersGrid">
+    <div class="empty-state">
+      <div class="icon">🔧</div>
+      <p>Configure o cookie de sessão para começar</p>
+    </div>
+  </div>
+
+</main>
+
+<!-- ── Log Modal ── -->
+<div class="modal-overlay" id="logModal">
+  <div class="modal log-modal">
+    <div class="log-modal-header">
+      <div class="modal-title" style="margin:0;">📋 Histórico do Turno</div>
+      <button class="btn-icon" onclick="closeLog()">✕</button>
+    </div>
+    <div class="log-controls">
+      <select class="log-date-sel" id="logDateSel" onchange="loadLog(this.value)"></select>
+      <button class="btn-icon" onclick="reloadLog()" title="Atualizar">🔄</button>
+      <button class="log-filter-btn active" id="logFilter_all" onclick="setLogFilter('all')">Todos</button>
+      <button class="log-filter-btn" id="logFilter_alerts" onclick="setLogFilter('alerts')">Alertas</button>
+      <button class="log-filter-btn" id="logFilter_couriers" onclick="setLogFilter('couriers')">Entregadores</button>
+    </div>
+    <div class="log-entries" id="logEntries">
+      <div class="log-empty">Carregando...</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Settings Modal ── -->
+<div class="modal-overlay" id="settingsModal">
+  <div class="modal">
+    <div class="modal-title">⚙️ Configurações</div>
+
+    <div class="form-group">
+      <label class="form-label">Cookie de sessão</label>
+      <textarea id="cookieInput" placeholder="Cole aqui o valor completo do cookie..."></textarea>
+      <div class="help-box">
+        <b>Como obter o cookie:</b><br>
+        1. Abra o Foody Delivery no Chrome e faça login<br>
+        2. Pressione <b>F12</b> → aba <b>Rede</b> (Network)<br>
+        3. Atualize a página (F5)<br>
+        4. Clique em qualquer requisição para <b>app.foodydelivery.com</b><br>
+        5. Em "Cabeçalhos de Requisição" copie o valor de <b>cookie:</b><br>
+        6. Cole aqui e salve
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Tempo de alerta (minutos)</label>
+      <input type="number" id="alertMinutes" value="15" min="1" max="120">
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeSettings()">Cancelar</button>
+      <button class="btn btn-primary" onclick="saveSettings()">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─── State ───────────────────────────────────────────────────────────────────
+const couriers = new Map(); // id → state
+let alerts = [];
+let alertMinutes = 15;
+let countdown = 15;
+let tickInterval = null;
+let readyOrdersCount = 0;
+
+// ─── Logging ─────────────────────────────────────────────────────────────────
+const STATUS_PT = {
+  delivering: 'Em Entrega',
+  available:  'Disponível',
+  warning:    'Atenção',
+  alert:      'Alerta',
+  missing:    'Sumiu do Mapa',
+};
+
+function logEvent(type, data = {}) {
+  fetch('/api/log', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ timestamp: new Date().toISOString(), type, ...data }),
+  }).catch(() => {});
+}
+
+// ─── Log Viewer ──────────────────────────────────────────────────────────────
+let currentLogs = [];
+let currentLogDate = '';
+let logFilter = 'all';
+
+async function openLog() {
+  document.getElementById('logModal').classList.add('open');
+  await loadLogDates();
+}
+
+function closeLog() {
+  document.getElementById('logModal').classList.remove('open');
+}
+
+async function reloadLog() {
+  if (currentLogDate) await loadLog(currentLogDate);
+}
+
+async function loadLogDates() {
+  try {
+    const data = await fetch('/api/logs').then(r => r.json());
+    const dates = data.dates || [];
+    const sel = document.getElementById('logDateSel');
+    if (dates.length === 0) {
+      sel.innerHTML = '<option value="">Nenhum registro</option>';
+      document.getElementById('logEntries').innerHTML = '<div class="log-empty">Nenhum registro ainda.</div>';
+      return;
+    }
+    sel.innerHTML = dates.map(d => `<option value="${d}">${fmtDateBR(d)}</option>`).join('');
+    await loadLog(dates[0]);
+  } catch (e) {}
+}
+
+async function loadLog(date) {
+  currentLogDate = date;
+  try {
+    const data = await fetch(`/api/log?date=${date}`).then(r => r.json());
+    currentLogs = data.logs || [];
+    renderLog();
+  } catch (e) {}
+}
+
+function setLogFilter(f) {
+  logFilter = f;
+  document.querySelectorAll('.log-filter-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById(`logFilter_${f}`).classList.add('active');
+  renderLog();
+}
+
+function renderLog() {
+  const container = document.getElementById('logEntries');
+
+  const filtered = currentLogs.filter(e => {
+    if (logFilter === 'alerts')   return e.type === 'alert';
+    if (logFilter === 'couriers') return ['status_change', 'courier_online'].includes(e.type);
+    return true;
+  });
+
+  if (filtered.length === 0) {
+    container.innerHTML = '<div class="log-empty">Nenhum registro para este filtro.</div>';
+    return;
+  }
+
+  const icons = { delivering: '🚀', available: '✅', warning: '⚠️', alert: '🚨', missing: '👻' };
+  const cls   = { delivering: 'log-info', available: 'log-success', warning: 'log-warn', alert: 'log-danger', missing: 'log-danger' };
+
+  container.innerHTML = [...filtered].reverse().map(e => {
+    const time = new Date(e.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    if (e.type === 'session_start') return `
+      <div class="log-entry log-session">
+        <span class="log-time">${time}</span><span>▶️</span>
+        <span>Monitoramento iniciado</span>
+      </div>`;
+
+    if (e.type === 'courier_online') return `
+      <div class="log-entry log-info">
+        <span class="log-time">${time}</span><span>🔵</span>
+        <span>${e.courierName} entrou online — ${STATUS_PT[e.status] || e.status}</span>
+      </div>`;
+
+    if (e.type === 'status_change') return `
+      <div class="log-entry ${cls[e.to] || 'log-info'}">
+        <span class="log-time">${time}</span><span>${icons[e.to] || '🔄'}</span>
+        <span>${e.courierName}: ${STATUS_PT[e.from] || e.from} → ${STATUS_PT[e.to] || e.to}</span>
+      </div>`;
+
+    if (e.type === 'alert') return `
+      <div class="log-entry log-danger">
+        <span class="log-time">${time}</span><span>${e.alertType === 'missing' ? '🚨' : '⚠️'}</span>
+        <span>${e.msg}</span>
+      </div>`;
+
+    return '';
+  }).join('');
+}
+
+function fmtDateBR(dateStr) {
+  const [y, m, d] = dateStr.split('-');
+  return `${d}/${m}/${y}`;
+}
+
+// courier state:
+// { id, name, vehicleType, status, statusSince, finishedAt, activeOrderCount,
+//   lastSeen, lat, lng, alerted }
+// status: 'delivering' | 'available' | 'warning' | 'alert' | 'missing'
+
+// ─── Settings ────────────────────────────────────────────────────────────────
+function loadSettings() {
+  const m = localStorage.getItem('alertMinutes');
+  if (m) alertMinutes = parseInt(m);
+  document.getElementById('alertMinutes').value = alertMinutes;
+}
+
+function openSettings()  { document.getElementById('settingsModal').classList.add('open'); }
+function closeSettings() { document.getElementById('settingsModal').classList.remove('open'); }
+
+async function saveSettings() {
+  const cookie = document.getElementById('cookieInput').value.trim();
+  const mins = parseInt(document.getElementById('alertMinutes').value) || 15;
+
+  alertMinutes = mins;
+  localStorage.setItem('alertMinutes', mins);
+
+  if (cookie) {
+    await fetch('/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cookie }),
+    });
+    document.getElementById('cookieInput').value = '';
+    document.getElementById('sessionBanner').style.display = 'none';
+    closeSettings();
+    await poll();
+  } else {
+    closeSettings();
+  }
+}
+
+// ─── Notifications ───────────────────────────────────────────────────────────
+function checkNotifPermission() {
+  if ('Notification' in window && Notification.permission === 'default') {
+    document.getElementById('notifBanner').style.display = 'flex';
+  }
+}
+
+async function requestNotif() {
+  await Notification.requestPermission();
+  document.getElementById('notifBanner').style.display = 'none';
+}
+
+function beep(freq = 880, duration = 0.4) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+    osc.start(ctx.currentTime);
+    osc.stop(ctx.currentTime + duration);
+  } catch (e) {}
+}
+
+function pushNotification(title, body) {
+  beep();
+  if (Notification.permission === 'granted') {
+    new Notification(title, { body });
+  }
+}
+
+// ─── Alerts ──────────────────────────────────────────────────────────────────
+function addAlert(type, msg) {
+  alerts.unshift({ type, msg, time: new Date(), id: Date.now() });
+  if (alerts.length > 30) alerts.pop();
+  pushNotification(type === 'missing' ? '🚨 Sumiu do mapa!' : '⚠️ Demora no retorno', msg);
+  logEvent('alert', { alertType: type, msg });
+  renderAlerts();
+}
+
+function dismissAlert(id) {
+  alerts = alerts.filter(a => a.id !== id);
+  renderAlerts();
+}
+
+function renderAlerts() {
+  const section = document.getElementById('alertsSection');
+  const list = document.getElementById('alertsList');
+
+  if (alerts.length === 0) {
+    section.style.display = 'none';
+    return;
+  }
+
+  section.style.display = 'block';
+  list.innerHTML = alerts.map(a => `
+    <div class="alert-card ${a.type === 'missing' ? 'danger' : 'warn'}">
+      <span class="alert-icon">${a.type === 'missing' ? '🚨' : '⚠️'}</span>
+      <div class="alert-body">
+        <div class="alert-msg">${a.msg}</div>
+        <div class="alert-time">${fmtTime(a.time)}</div>
+      </div>
+      <button class="btn-dismiss" onclick="dismissAlert(${a.id})">✕</button>
+    </div>
+  `).join('');
+}
+
+// ─── Polling ─────────────────────────────────────────────────────────────────
+async function poll() {
+  try {
+    const [trackingRes, ordersRes] = await Promise.all([
+      fetch('/api/tracking'),
+      fetch('/api/orders'),
+    ]);
+    const tracking = await trackingRes.json();
+    const orders   = await ordersRes.json();
+
+    if (tracking.error === 'sem_sessao') { setStatus('error'); openSettings(); return; }
+    if (tracking.error === 'sessao_expirada' || !tracking.couriers) {
+      setStatus('error');
+      document.getElementById('sessionBanner').style.display = 'flex';
+      return;
+    }
+
+    document.getElementById('sessionBanner').style.display = 'none';
+    setStatus('ok');
+
+    // Pedidos prontos (roxo) esperando entregador
+    readyOrdersCount = (orders.pendingOrdersByCompany || [])
+      .filter(o => o.status === 'ready').length;
+
+    processTracking(tracking.couriers, orders.ordersByCourier || []);
+    renderCouriers();
+    renderReadyBadge();
+  } catch (e) {
+    setStatus('error');
+  }
+}
+
+function processTracking(trackingList, ordersByCourierList) {
+  const now = Date.now();
+  const seenIds = new Set(trackingList.map(c => c.courierId));
+
+  const ordersByName = new Map();
+  for (const co of ordersByCourierList) {
+    ordersByName.set(co.courierName.trim(), co.orders || []);
+  }
+
+  for (const tc of trackingList) {
+    const id   = tc.courierId;
+    const name = tc.courierName.trim();
+    const allOrders = ordersByName.get(name) || [];
+
+    const activeOrders    = allOrders.filter(o => ['onGoing','accepted','dispatched'].includes(o.status));
+    const deliveredOrders = allOrders.filter(o => o.status === 'delivered' && o.deliveryDate);
+
+    let finishedAt = null;
+    if (activeOrders.length === 0 && deliveredOrders.length > 0) {
+      finishedAt = Math.max(...deliveredOrders.map(o => new Date(o.deliveryDate).getTime()));
+    }
+
+    if (!couriers.has(id)) {
+      const done = activeOrders.length === 0;
+      const status = done ? 'available' : 'delivering';
+      couriers.set(id, {
+        id, name,
+        vehicleType: tc.vehicleType,
+        lastSeen: now,
+        lat: tc.latitute, lng: tc.longitude,
+        activeOrderCount: activeOrders.length,
+        finishedAt,
+        status,
+        statusSince: finishedAt || now,
+        alerted: false,
+      });
+      logEvent('courier_online', { courierName: name, status });
+      continue;
+    }
+
+    const cs = couriers.get(id);
+    const prevStatus = cs.status;
+    cs.lastSeen = now;
+    cs.lat = tc.latitute;
+    cs.lng = tc.longitude;
+    cs.activeOrderCount = activeOrders.length;
+
+    if (cs.status === 'missing') {
+      cs.status = activeOrders.length > 0 ? 'delivering' : 'available';
+      cs.statusSince = finishedAt || now;
+      cs.finishedAt  = finishedAt;
+      cs.alerted = false;
+    } else if (activeOrders.length > 0) {
+      if (cs.status !== 'delivering') {
+        cs.status = 'delivering';
+        cs.statusSince = now;
+        cs.finishedAt  = null;
+        cs.alerted = false;
+      }
+    } else {
+      if (cs.status === 'delivering') {
+        cs.finishedAt  = finishedAt || now;
+        cs.statusSince = cs.finishedAt;
+        cs.alerted = false;
+      }
+
+      if (cs.finishedAt) {
+        const elapsed = (now - cs.finishedAt) / 60000;
+
+        if (readyOrdersCount > 0) {
+          if (elapsed >= alertMinutes) {
+            cs.status = 'alert';
+            if (!cs.alerted) {
+              cs.alerted = true;
+              addAlert('slow', `${cs.name} terminou há ${Math.floor(elapsed)}min e tem pedido esperando!`);
+            }
+          } else if (elapsed >= alertMinutes * 0.65) {
+            if (cs.status !== 'alert') cs.status = 'warning';
+          } else {
+            if (cs.status !== 'alert' && cs.status !== 'warning') cs.status = 'available';
+          }
+        } else {
+          if (cs.status === 'alert' || cs.status === 'warning') cs.alerted = false;
+          cs.status = 'available';
+        }
+      }
+    }
+
+    if (cs.status !== prevStatus) {
+      logEvent('status_change', { courierName: cs.name, from: prevStatus, to: cs.status });
+    }
+  }
+
+  // Detecta quem sumiu do mapa
+  for (const [id, cs] of couriers) {
+    if (!seenIds.has(id) && cs.status !== 'missing') {
+      const prevStatus = cs.status;
+      cs.status = 'missing';
+      cs.statusSince = now;
+      cs.alerted = true;
+      logEvent('status_change', { courierName: cs.name, from: prevStatus, to: 'missing' });
+      addAlert('missing', `${cs.name} sumiu do mapa!`);
+    }
+  }
+}
+
+function renderReadyBadge() {
+  const badge = document.getElementById('readyBadge');
+  if (readyOrdersCount > 0) {
+    badge.textContent = `🟣 ${readyOrdersCount} pronto${readyOrdersCount > 1 ? 's' : ''} esperando`;
+    badge.style.display = 'inline';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+// ─── Render ───────────────────────────────────────────────────────────────────
+function renderCouriers() {
+  const grid = document.getElementById('couriersGrid');
+  const now = Date.now();
+
+  const sorted = [...couriers.values()].sort((a, b) => {
+    const order = { alert: 0, missing: 1, warning: 2, available: 3, delivering: 4 };
+    return (order[a.status] ?? 9) - (order[b.status] ?? 9);
+  });
+
+  if (sorted.length === 0) {
+    grid.innerHTML = `
+      <div class="empty-state">
+        <div class="icon">😴</div>
+        <p>Nenhum entregador online no momento</p>
+      </div>`;
+    return;
+  }
+
+  grid.innerHTML = sorted.map(c => {
+    const now2 = Date.now();
+
+    const cfgMap = {
+      delivering: { label: 'Em Entrega',    badge: 'badge-delivering', timerClass: 'blue',   timerLabel: `${c.activeOrderCount} pedido${c.activeOrderCount !== 1 ? 's' : ''} ativo${c.activeOrderCount !== 1 ? 's' : ''}` },
+      available:  { label: 'Disponível',    badge: 'badge-available',  timerClass: 'green',  timerLabel: readyOrdersCount > 0 ? 'voltando' : 'descansando' },
+      warning:    { label: 'Atenção',       badge: 'badge-warning',    timerClass: 'yellow', timerLabel: 'tem pedido esperando' },
+      alert:      { label: 'ALERTA',        badge: 'badge-alert',      timerClass: 'red',    timerLabel: 'retorno pendente' },
+      missing:    { label: 'Sumiu do Mapa', badge: 'badge-missing',    timerClass: 'red',    timerLabel: 'sumiu do mapa' },
+    };
+    const cfg = cfgMap[c.status];
+
+    const timerMs = c.status === 'delivering'
+      ? now2 - c.statusSince
+      : c.finishedAt ? now2 - c.finishedAt : now2 - c.statusSince;
+
+    const vehicle = c.vehicleType === 'motorcycle' ? '🏍️ Moto' : '🚗 Carro';
+
+    return `
+      <div class="courier-card ${c.status}">
+        <div class="card-header">
+          <div>
+            <div class="courier-name">${c.name}</div>
+            <div class="courier-vehicle">${vehicle}</div>
+          </div>
+          <span class="badge ${cfg.badge}">${cfg.label}</span>
+        </div>
+        <div class="timer-block">
+          <div class="timer ${cfg.timerClass}">${fmtDuration(timerMs)}</div>
+          <div class="timer-label">${cfg.timerLabel}</div>
+        </div>
+        <div class="card-footer">
+          <span>visto ${fmtRelative(c.lastSeen)}</span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// ─── UI helpers ──────────────────────────────────────────────────────────────
+function setStatus(s) {
+  document.getElementById('statusDot').className = `status-dot ${s}`;
+}
+
+function fmtDuration(ms) {
+  if (ms < 0) ms = 0;
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
+}
+
+function pad(n) { return String(n).padStart(2, '0'); }
+
+function fmtTime(date) {
+  return date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function fmtRelative(ts) {
+  const diff = Math.floor((Date.now() - ts) / 1000);
+  if (diff < 60) return `há ${diff}s`;
+  return `há ${Math.floor(diff / 60)}min`;
+}
+
+// ─── Tick (atualiza timers e countdown) ──────────────────────────────────────
+async function forceRefresh() {
+  countdown = 0;
+  document.getElementById('refreshText').textContent = 'atualizando...';
+  await poll();
+  countdown = 15;
+}
+
+function startTick() {
+  clearInterval(tickInterval);
+  countdown = 15;
+
+  tickInterval = setInterval(() => {
+    countdown--;
+    document.getElementById('refreshText').textContent =
+      countdown > 0 ? `atualiza em ${countdown}s` : 'atualizando...';
+
+    renderCouriers();
+
+    if (countdown <= 0) {
+      countdown = 15;
+      poll();
+    }
+  }, 1000);
+}
+
+// ─── Init ────────────────────────────────────────────────────────────────────
+async function init() {
+  loadSettings();
+  checkNotifPermission();
+
+  const cfg = await fetch('/config').then(r => r.json());
+  if (cfg.configured) {
+    logEvent('session_start');
+    await poll();
+  } else {
+    openSettings();
+  }
+
+  startTick();
+}
+
+init();
+</script>
+</body>
+</html>
