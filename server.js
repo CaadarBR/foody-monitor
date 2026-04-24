@@ -12,10 +12,15 @@ if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR);
 
 let cookieString = '';
 
-try {
-  const cfg = JSON.parse(fs.readFileSync('./config.json', 'utf8'));
-  if (cfg.cookie) cookieString = cfg.cookie;
-} catch (e) {}
+// Env var tem prioridade (produção no EasyPanel); config.json é fallback local
+if (process.env.FOODY_COOKIE) {
+  cookieString = process.env.FOODY_COOKIE;
+} else {
+  try {
+    const cfg = JSON.parse(fs.readFileSync('./config.json', 'utf8'));
+    if (cfg.cookie) cookieString = cfg.cookie;
+  } catch (e) {}
+}
 
 // Turnos começam às 18h e podem ir até ~06h do dia seguinte
 function operationalDate() {
@@ -25,7 +30,7 @@ function operationalDate() {
 }
 
 app.get('/config', (req, res) => {
-  res.json({ configured: cookieString.length > 0 });
+  res.json({ configured: cookieString.length > 0, usingEnv: !!process.env.FOODY_COOKIE });
 });
 
 app.post('/config', (req, res) => {
