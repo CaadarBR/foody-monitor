@@ -441,15 +441,68 @@
 </div>
 
 <script>
-// ─── State ───────────────────────────────────────────────────────────────────
-const couriers = new Map(); // id → state
-let alerts = [];
-let alertMinutes = 15;
-let countdown = 15;
-let tickInterval = null;
+// ─── Estado ───────────────────────────────────────────────────────────────────
+const couriers = new Map();
+let alerts           = [];
+let alertMinutes     = 15;
 let readyOrdersCount = 0;
+let lastServerUpdate = null;
+let knownAlertIds    = new Set();
+let firstLoad        = true;
+let countdown        = 10;
+let tickInterval     = null;
 
-// ─── Logging ─────────────────────────────────────────────────────────────────
+// ─── Busca estado do servidor ─────────────────────────────────────────────────
+async function fetchState() {
+  try {
+    const state = await fetch('/api/state').then(r => r.json());
+
+    if (!state.configured) {
+      setStatus('error');
+      openSettings();
+      return;
+    }
+
+    if (!state.sessionOk) {
+      setStatus('error');
+      document.getElementById('sessionBanner').style.display = 'flex';
+      return;
+    }
+
+    document.getElementById('sessionBanner').style.display = 'none';
+    setStatus('ok');
+
+    lastServerUpdate  = state.lastUpdated;
+    alertMinutes      = state.alertMinutes;
+    readyOrdersCount  = state.readyOrdersCount;
+
+    // Detecta alertas novos → toca som (ignora os que já existiam ao abrir)
+    for (const alert of state.alerts) {
+      if (!knownAlertIds.has(alert.id)) {
+        knownAlertIds.add(alert.id);
+        if (!firstLoad) {
+          pushNotification(
+            alert.type === 'missing' ? '🚨 Sumiu do mapa!' : '⚠️ Demora no retorno',
+            alert.msg
+          );
+        }
+      }
+    }
+    firstLoad = false;
+
+    alerts = state.alerts;
+    couriers.clear();
+    for (const c of state.couriers) couriers.set(c.id, c);
+
+    renderAlerts();
+    renderCouriers();
+    renderReadyBadge();
+  } catch (e) {
+    setStatus('error');
+  }
+}
+
+// ─── Log Viewer ──────────────────────────────────────────────────────────────
 const STATUS_PT = {
   delivering: 'Em Entrega',
   available:  'Disponível',
@@ -458,18 +511,9 @@ const STATUS_PT = {
   missing:    'Sumiu do Mapa',
 };
 
-function logEvent(type, data = {}) {
-  fetch('/api/log', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ timestamp: new Date().toISOString(), type, ...data }),
-  }).catch(() => {});
-}
-
-// ─── Log Viewer ──────────────────────────────────────────────────────────────
-let currentLogs = [];
+let currentLogs    = [];
 let currentLogDate = '';
-let logFilter = 'all';
+let logFilter      = 'all';
 
 async function openLog() {
   document.getElementById('logModal').classList.add('open');
@@ -486,9 +530,9 @@ async function reloadLog() {
 
 async function loadLogDates() {
   try {
-    const data = await fetch('/api/logs').then(r => r.json());
+    const data  = await fetch('/api/logs').then(r => r.json());
     const dates = data.dates || [];
-    const sel = document.getElementById('logDateSel');
+    const sel   = document.getElementById('logDateSel');
     if (dates.length === 0) {
       sel.innerHTML = '<option value="">Nenhum registro</option>';
       document.getElementById('logEntries').innerHTML = '<div class="log-empty">Nenhum registro ainda.</div>';
@@ -502,7 +546,7 @@ async function loadLogDates() {
 async function loadLog(date) {
   currentLogDate = date;
   try {
-    const data = await fetch(`/api/log?date=${date}`).then(r => r.json());
+    const data  = await fetch(`/api/log?date=${date}`).then(r => r.json());
     currentLogs = data.logs || [];
     renderLog();
   } catch (e) {}
@@ -517,8 +561,7 @@ function setLogFilter(f) {
 
 function renderLog() {
   const container = document.getElementById('logEntries');
-
-  const filtered = currentLogs.filter(e => {
+  const filtered  = currentLogs.filter(e => {
     if (logFilter === 'alerts')   return e.type === 'alert';
     if (logFilter === 'couriers') return ['status_change', 'courier_online'].includes(e.type);
     return true;
@@ -568,41 +611,38 @@ function fmtDateBR(dateStr) {
   return `${d}/${m}/${y}`;
 }
 
-// courier state:
-// { id, name, vehicleType, status, statusSince, finishedAt, activeOrderCount,
-//   lastSeen, lat, lng, alerted }
-// status: 'delivering' | 'available' | 'warning' | 'alert' | 'missing'
-
 // ─── Settings ────────────────────────────────────────────────────────────────
-function loadSettings() {
-  const m = localStorage.getItem('alertMinutes');
-  if (m) alertMinutes = parseInt(m);
+function openSettings() {
   document.getElementById('alertMinutes').value = alertMinutes;
+  document.getElementById('settingsModal').classList.add('open');
 }
 
-function openSettings()  { document.getElementById('settingsModal').classList.add('open'); }
-function closeSettings() { document.getElementById('settingsModal').classList.remove('open'); }
+function closeSettings() {
+  document.getElementById('settingsModal').classList.remove('open');
+}
 
 async function saveSettings() {
   const cookie = document.getElementById('cookieInput').value.trim();
-  const mins = parseInt(document.getElementById('alertMinutes').value) || 15;
+  const mins   = parseInt(document.getElementById('alertMinutes').value) || 15;
+
+  const body = { alertMinutes: mins };
+  if (cookie) body.cookie = cookie;
+
+  await fetch('/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 
   alertMinutes = mins;
-  localStorage.setItem('alertMinutes', mins);
 
   if (cookie) {
-    await fetch('/config', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cookie }),
-    });
     document.getElementById('cookieInput').value = '';
     document.getElementById('sessionBanner').style.display = 'none';
-    closeSettings();
-    await poll();
-  } else {
-    closeSettings();
   }
+
+  closeSettings();
+  await fetchState();
 }
 
 // ─── Notifications ───────────────────────────────────────────────────────────
@@ -619,8 +659,8 @@ async function requestNotif() {
 
 function beep(freq = 880, duration = 0.4) {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const osc = ctx.createOscillator();
+    const ctx  = new (window.AudioContext || window.webkitAudioContext)();
+    const osc  = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.connect(gain);
     gain.connect(ctx.destination);
@@ -640,27 +680,22 @@ function pushNotification(title, body) {
 }
 
 // ─── Alerts ──────────────────────────────────────────────────────────────────
-function addAlert(type, msg) {
-  alerts.unshift({ type, msg, time: new Date(), id: Date.now() });
-  if (alerts.length > 30) alerts.pop();
-  pushNotification(type === 'missing' ? '🚨 Sumiu do mapa!' : '⚠️ Demora no retorno', msg);
-  logEvent('alert', { alertType: type, msg });
-  renderAlerts();
-}
-
-function dismissAlert(id) {
+async function dismissAlert(id) {
+  await fetch('/api/alerts/dismiss', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id }),
+  }).catch(() => {});
+  knownAlertIds.delete(id);
   alerts = alerts.filter(a => a.id !== id);
   renderAlerts();
 }
 
 function renderAlerts() {
   const section = document.getElementById('alertsSection');
-  const list = document.getElementById('alertsList');
+  const list    = document.getElementById('alertsList');
 
-  if (alerts.length === 0) {
-    section.style.display = 'none';
-    return;
-  }
+  if (alerts.length === 0) { section.style.display = 'none'; return; }
 
   section.style.display = 'block';
   list.innerHTML = alerts.map(a => `
@@ -668,166 +703,27 @@ function renderAlerts() {
       <span class="alert-icon">${a.type === 'missing' ? '🚨' : '⚠️'}</span>
       <div class="alert-body">
         <div class="alert-msg">${a.msg}</div>
-        <div class="alert-time">${fmtTime(a.time)}</div>
+        <div class="alert-time">${new Date(a.time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
       </div>
       <button class="btn-dismiss" onclick="dismissAlert(${a.id})">✕</button>
     </div>
   `).join('');
 }
 
-// ─── Polling ─────────────────────────────────────────────────────────────────
-async function poll() {
-  try {
-    const [trackingRes, ordersRes] = await Promise.all([
-      fetch('/api/tracking'),
-      fetch('/api/orders'),
-    ]);
-    const tracking = await trackingRes.json();
-    const orders   = await ordersRes.json();
-
-    if (tracking.error === 'sem_sessao') { setStatus('error'); openSettings(); return; }
-    if (tracking.error === 'sessao_expirada' || !tracking.couriers) {
-      setStatus('error');
-      document.getElementById('sessionBanner').style.display = 'flex';
-      return;
-    }
-
-    document.getElementById('sessionBanner').style.display = 'none';
-    setStatus('ok');
-
-    // Pedidos prontos (roxo) esperando entregador
-    readyOrdersCount = (orders.pendingOrdersByCompany || [])
-      .filter(o => o.status === 'ready').length;
-
-    processTracking(tracking.couriers, orders.ordersByCourier || []);
-    renderCouriers();
-    renderReadyBadge();
-  } catch (e) {
-    setStatus('error');
-  }
-}
-
-function processTracking(trackingList, ordersByCourierList) {
-  const now = Date.now();
-  const seenIds = new Set(trackingList.map(c => c.courierId));
-
-  const ordersByName = new Map();
-  for (const co of ordersByCourierList) {
-    ordersByName.set(co.courierName.trim(), co.orders || []);
-  }
-
-  for (const tc of trackingList) {
-    const id   = tc.courierId;
-    const name = tc.courierName.trim();
-    const allOrders = ordersByName.get(name) || [];
-
-    const activeOrders    = allOrders.filter(o => ['onGoing','accepted','dispatched'].includes(o.status));
-    const deliveredOrders = allOrders.filter(o => o.status === 'delivered' && o.deliveryDate);
-
-    let finishedAt = null;
-    if (activeOrders.length === 0 && deliveredOrders.length > 0) {
-      finishedAt = Math.max(...deliveredOrders.map(o => new Date(o.deliveryDate).getTime()));
-    }
-
-    if (!couriers.has(id)) {
-      const done = activeOrders.length === 0;
-      const status = done ? 'available' : 'delivering';
-      couriers.set(id, {
-        id, name,
-        vehicleType: tc.vehicleType,
-        lastSeen: now,
-        lat: tc.latitute, lng: tc.longitude,
-        activeOrderCount: activeOrders.length,
-        finishedAt,
-        status,
-        statusSince: finishedAt || now,
-        alerted: false,
-      });
-      logEvent('courier_online', { courierName: name, status });
-      continue;
-    }
-
-    const cs = couriers.get(id);
-    const prevStatus = cs.status;
-    cs.lastSeen = now;
-    cs.lat = tc.latitute;
-    cs.lng = tc.longitude;
-    cs.activeOrderCount = activeOrders.length;
-
-    if (cs.status === 'missing') {
-      cs.status = activeOrders.length > 0 ? 'delivering' : 'available';
-      cs.statusSince = finishedAt || now;
-      cs.finishedAt  = finishedAt;
-      cs.alerted = false;
-    } else if (activeOrders.length > 0) {
-      if (cs.status !== 'delivering') {
-        cs.status = 'delivering';
-        cs.statusSince = now;
-        cs.finishedAt  = null;
-        cs.alerted = false;
-      }
-    } else {
-      if (cs.status === 'delivering') {
-        cs.finishedAt  = finishedAt || now;
-        cs.statusSince = cs.finishedAt;
-        cs.alerted = false;
-      }
-
-      if (cs.finishedAt) {
-        const elapsed = (now - cs.finishedAt) / 60000;
-
-        if (readyOrdersCount > 0) {
-          if (elapsed >= alertMinutes) {
-            cs.status = 'alert';
-            if (!cs.alerted) {
-              cs.alerted = true;
-              addAlert('slow', `${cs.name} terminou há ${Math.floor(elapsed)}min e tem pedido esperando!`);
-            }
-          } else if (elapsed >= alertMinutes * 0.65) {
-            if (cs.status !== 'alert') cs.status = 'warning';
-          } else {
-            if (cs.status !== 'alert' && cs.status !== 'warning') cs.status = 'available';
-          }
-        } else {
-          if (cs.status === 'alert' || cs.status === 'warning') cs.alerted = false;
-          cs.status = 'available';
-        }
-      }
-    }
-
-    if (cs.status !== prevStatus) {
-      logEvent('status_change', { courierName: cs.name, from: prevStatus, to: cs.status });
-    }
-  }
-
-  // Detecta quem sumiu do mapa
-  for (const [id, cs] of couriers) {
-    if (!seenIds.has(id) && cs.status !== 'missing') {
-      const prevStatus = cs.status;
-      cs.status = 'missing';
-      cs.statusSince = now;
-      cs.alerted = true;
-      logEvent('status_change', { courierName: cs.name, from: prevStatus, to: 'missing' });
-      addAlert('missing', `${cs.name} sumiu do mapa!`);
-    }
-  }
-}
-
+// ─── Render couriers ──────────────────────────────────────────────────────────
 function renderReadyBadge() {
   const badge = document.getElementById('readyBadge');
   if (readyOrdersCount > 0) {
-    badge.textContent = `🟣 ${readyOrdersCount} pronto${readyOrdersCount > 1 ? 's' : ''} esperando`;
+    badge.textContent  = `🟣 ${readyOrdersCount} pronto${readyOrdersCount > 1 ? 's' : ''} esperando`;
     badge.style.display = 'inline';
   } else {
     badge.style.display = 'none';
   }
 }
 
-// ─── Render ───────────────────────────────────────────────────────────────────
 function renderCouriers() {
-  const grid = document.getElementById('couriersGrid');
-  const now = Date.now();
-
+  const grid   = document.getElementById('couriersGrid');
+  const now    = Date.now();
   const sorted = [...couriers.values()].sort((a, b) => {
     const order = { alert: 0, missing: 1, warning: 2, available: 3, delivering: 4 };
     return (order[a.status] ?? 9) - (order[b.status] ?? 9);
@@ -843,8 +739,6 @@ function renderCouriers() {
   }
 
   grid.innerHTML = sorted.map(c => {
-    const now2 = Date.now();
-
     const cfgMap = {
       delivering: { label: 'Em Entrega',    badge: 'badge-delivering', timerClass: 'blue',   timerLabel: `${c.activeOrderCount} pedido${c.activeOrderCount !== 1 ? 's' : ''} ativo${c.activeOrderCount !== 1 ? 's' : ''}` },
       available:  { label: 'Disponível',    badge: 'badge-available',  timerClass: 'green',  timerLabel: readyOrdersCount > 0 ? 'voltando' : 'descansando' },
@@ -855,8 +749,8 @@ function renderCouriers() {
     const cfg = cfgMap[c.status];
 
     const timerMs = c.status === 'delivering'
-      ? now2 - c.statusSince
-      : c.finishedAt ? now2 - c.finishedAt : now2 - c.statusSince;
+      ? now - c.statusSince
+      : c.finishedAt ? now - c.finishedAt : now - c.statusSince;
 
     const vehicle = c.vehicleType === 'motorcycle' ? '🏍️ Moto' : '🚗 Carro';
 
@@ -880,25 +774,21 @@ function renderCouriers() {
   }).join('');
 }
 
-// ─── UI helpers ──────────────────────────────────────────────────────────────
+// ─── UI helpers ───────────────────────────────────────────────────────────────
 function setStatus(s) {
   document.getElementById('statusDot').className = `status-dot ${s}`;
 }
 
 function fmtDuration(ms) {
   if (ms < 0) ms = 0;
-  const s = Math.floor(ms / 1000);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
+  const s   = Math.floor(ms / 1000);
+  const h   = Math.floor(s / 3600);
+  const m   = Math.floor((s % 3600) / 60);
   const sec = s % 60;
   return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
 }
 
 function pad(n) { return String(n).padStart(2, '0'); }
-
-function fmtTime(date) {
-  return date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
 
 function fmtRelative(ts) {
   const diff = Math.floor((Date.now() - ts) / 1000);
@@ -906,45 +796,43 @@ function fmtRelative(ts) {
   return `há ${Math.floor(diff / 60)}min`;
 }
 
-// ─── Tick (atualiza timers e countdown) ──────────────────────────────────────
+// ─── Tick ─────────────────────────────────────────────────────────────────────
 async function forceRefresh() {
   countdown = 0;
   document.getElementById('refreshText').textContent = 'atualizando...';
-  await poll();
-  countdown = 15;
+  await fetchState();
+  countdown = 10;
 }
 
 function startTick() {
   clearInterval(tickInterval);
-  countdown = 15;
+  countdown = 10;
 
   tickInterval = setInterval(() => {
     countdown--;
-    document.getElementById('refreshText').textContent =
-      countdown > 0 ? `atualiza em ${countdown}s` : 'atualizando...';
+
+    if (lastServerUpdate) {
+      const ago = Math.floor((Date.now() - lastServerUpdate) / 1000);
+      document.getElementById('refreshText').textContent =
+        countdown > 0 ? `dados de ${ago}s atrás` : 'atualizando...';
+    } else {
+      document.getElementById('refreshText').textContent =
+        countdown > 0 ? `atualiza em ${countdown}s` : 'atualizando...';
+    }
 
     renderCouriers();
 
     if (countdown <= 0) {
-      countdown = 15;
-      poll();
+      countdown = 10;
+      fetchState();
     }
   }, 1000);
 }
 
-// ─── Init ────────────────────────────────────────────────────────────────────
+// ─── Init ─────────────────────────────────────────────────────────────────────
 async function init() {
-  loadSettings();
   checkNotifPermission();
-
-  const cfg = await fetch('/config').then(r => r.json());
-  if (cfg.configured) {
-    logEvent('session_start');
-    await poll();
-  } else {
-    openSettings();
-  }
-
+  await fetchState();
   startTick();
 }
 
