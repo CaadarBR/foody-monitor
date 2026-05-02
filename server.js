@@ -80,6 +80,33 @@ let pollRunning      = false;
 let hasLoggedStart   = false;
 let currentOpDate    = operationalDate();
 
+const STATE_FILE = path.join(LOGS_DIR, 'state.json');
+
+function saveState() {
+  try {
+    fs.writeFileSync(STATE_FILE, JSON.stringify({
+      opDate:          currentOpDate,
+      couriers:        [...courierMap.entries()],
+      activeAlerts,
+      readyOrdersCount,
+      savedAt:         Date.now(),
+    }));
+  } catch (e) {}
+}
+
+function loadState() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    if (raw.opDate !== operationalDate()) return; // turno diferente, descarta
+    for (const [id, cs] of raw.couriers) courierMap.set(id, cs);
+    activeAlerts     = raw.activeAlerts     || [];
+    readyOrdersCount = raw.readyOrdersCount || 0;
+    console.log(`[INFO] Estado restaurado: ${courierMap.size} entregadores, ${activeAlerts.length} alertas.`);
+  } catch (e) {}
+}
+
+loadState();
+
 function addAlert(type, msg) {
   activeAlerts.unshift({ id: Date.now(), type, msg, time: new Date().toISOString() });
   if (activeAlerts.length > 30) activeAlerts.pop();
@@ -225,6 +252,7 @@ async function doPoll() {
     processTracking(tracking.couriers, orders.ordersByCourier || []);
     lastUpdated = Date.now();
     sessionOk   = true;
+    saveState();
   } catch (e) {
     sessionOk = false;
     console.error('[POLL]', e.message);
