@@ -41,11 +41,9 @@ loadConfig();
 
 function operationalDate() {
   const now = new Date();
-  if (now.getHours() < 5) now.setDate(now.getDate() - 1);
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const d = String(now.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+  // Turno encerra às 05:00 BRT = 08:00 UTC. Usa UTC puro para evitar bug de fuso.
+  if (now.getUTCHours() < 8) now.setUTCDate(now.getUTCDate() - 1);
+  return now.toISOString().slice(0, 10);
 }
 
 function appendLog(entry) {
@@ -196,7 +194,8 @@ function processTracking(trackingList, ordersByCourierList) {
 
     if (cs.status === 'missing') {
       cs.status     = activeOrders.length > 0 ? 'delivering' : 'available';
-      cs.statusSince = finishedAt || now;
+      const onlineAt = courierOnlineSince.get(cs.name) || now;
+      cs.statusSince = finishedAt || onlineAt;
       cs.finishedAt  = finishedAt;
       cs.alerted    = false;
     } else if (activeOrders.length > 0) {
