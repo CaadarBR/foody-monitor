@@ -133,7 +133,8 @@ function processTracking(trackingList, ordersByCourierList) {
 
     let finishedAt = null;
     if (activeOrders.length === 0 && deliveredOrders.length > 0) {
-      finishedAt = Math.max(...deliveredOrders.map(o => new Date(o.deliveryDate).getTime()));
+      const raw = Math.max(...deliveredOrders.map(o => new Date(o.deliveryDate).getTime()));
+      finishedAt = Math.min(raw, now); // nunca usar timestamp futuro (possível offset de fuso)
     }
 
     if (!courierMap.has(id)) {
