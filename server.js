@@ -42,7 +42,10 @@ loadConfig();
 function operationalDate() {
   const now = new Date();
   if (now.getHours() < 5) now.setDate(now.getDate() - 1);
-  return now.toISOString().slice(0, 10);
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
 function appendLog(entry) {
