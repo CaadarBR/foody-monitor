@@ -113,6 +113,25 @@ function loadState() {
 
 loadState();
 
+// Guarda quando cada entregador apareceu pela primeira vez hoje
+const courierOnlineSince = new Map(); // nome → timestamp
+
+function loadOnlineTimes() {
+  try {
+    const file = path.join(LOGS_DIR, `${operationalDate()}.json`);
+    const logs = JSON.parse(fs.readFileSync(file, 'utf8'));
+    for (const e of logs) {
+      if (e.type === 'courier_online' && !courierOnlineSince.has(e.courierName)) {
+        courierOnlineSince.set(e.courierName, new Date(e.timestamp).getTime());
+      }
+    }
+    if (courierOnlineSince.size > 0)
+      console.log(`[INFO] Horários de entrada restaurados: ${courierOnlineSince.size} entregadores.`);
+  } catch (e) {}
+}
+
+loadOnlineTimes();
+
 function addAlert(type, msg) {
   activeAlerts.unshift({ id: Date.now(), type, msg, time: new Date().toISOString() });
   if (activeAlerts.length > 30) activeAlerts.pop();
@@ -145,6 +164,12 @@ function processTracking(trackingList, ordersByCourierList) {
 
     if (!courierMap.has(id)) {
       const status = activeOrders.length > 0 ? 'delivering' : 'available';
+      // Usa horário real de entrada do log (resiste a reinícios do servidor)
+      const onlineAt = courierOnlineSince.get(name) || now;
+      if (!courierOnlineSince.has(name)) {
+        courierOnlineSince.set(name, now);
+        appendLog({ type: 'courier_online', courierName: name, status });
+      }
       courierMap.set(id, {
         id, name,
         vehicleType: tc.vehicleType,
@@ -153,10 +178,9 @@ function processTracking(trackingList, ordersByCourierList) {
         activeOrderCount: activeOrders.length,
         finishedAt,
         status,
-        statusSince: finishedAt || now,
+        statusSince: finishedAt || onlineAt,
         alerted: false,
       });
-      appendLog({ type: 'courier_online', courierName: name, status });
       continue;
     }
 
@@ -236,6 +260,7 @@ async function doPoll() {
       currentOpDate = today;
       courierMap.clear();
       activeAlerts  = [];
+      courierOnlineSince.clear();
       hasLoggedStart = false;
       console.log('[INFO] Novo turno — estado resetado.');
     }
