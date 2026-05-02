@@ -17,21 +17,26 @@ const LOGS_DIR = path.join(__dirname, 'logs');
 if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR);
 
 // ── Config ────────────────────────────────────────────────────────────────────
+// Salvo em logs/config.json — mesma pasta do volume persistente do EasyPanel
+
+const CONFIG_FILE = path.join(LOGS_DIR, 'config.json');
 
 let config = { cookie: '', alertMinutes: 15 };
 
 function loadConfig() {
-  // Env var como padrão inicial, arquivo sobrescreve (preserva atualizações do usuário)
   if (process.env.FOODY_COOKIE) config.cookie = process.env.FOODY_COOKIE;
-  try {
-    const saved = JSON.parse(fs.readFileSync('./config.json', 'utf8'));
-    if (saved.cookie) config.cookie = saved.cookie;
-    if (saved.alertMinutes) config.alertMinutes = saved.alertMinutes;
-  } catch (e) {}
+  // Tenta localização antiga (./config.json) para migrar cookie existente
+  for (const f of ['./config.json', CONFIG_FILE]) {
+    try {
+      const saved = JSON.parse(fs.readFileSync(f, 'utf8'));
+      if (saved.cookie) config.cookie = saved.cookie;
+      if (saved.alertMinutes) config.alertMinutes = saved.alertMinutes;
+    } catch (e) {}
+  }
 }
 
 function saveConfig() {
-  try { fs.writeFileSync('./config.json', JSON.stringify(config, null, 2)); } catch (e) {}
+  try { fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2)); } catch (e) {}
 }
 
 loadConfig();
