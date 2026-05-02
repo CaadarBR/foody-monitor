@@ -75,9 +75,18 @@ function foodyHeaders() {
 }
 
 async function foodyFetch(url) {
-  const r = await fetch(`${url}?_=${Date.now()}`, { headers: foodyHeaders() });
-  const text = await r.text();
-  return JSON.parse(text); // lança exceção se não for JSON (sessão expirada)
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const r = await fetch(`${url}?_=${Date.now()}`, {
+      headers: foodyHeaders(),
+      signal: controller.signal,
+    });
+    const text = await r.text();
+    return JSON.parse(text);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ── Estado do monitor ─────────────────────────────────────────────────────────
