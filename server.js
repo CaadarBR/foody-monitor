@@ -3,6 +3,12 @@ const fetch = require('node-fetch');
 const path = require('path');
 const fs = require('fs');
 
+// Evita que erros inesperados derrubem o processo
+process.on('uncaughtException',  err  => console.error('[ERRO]', err));
+process.on('unhandledRejection', reason => console.error('[PROMISE]', reason));
+
+const SERVER_STARTED_AT = Date.now();
+
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -276,6 +282,7 @@ app.get('/api/state', (req, res) => {
     alertMinutes:     config.alertMinutes,
     couriers:         [...courierMap.values()],
     alerts:           activeAlerts,
+    serverStartedAt:  SERVER_STARTED_AT,
   });
 });
 

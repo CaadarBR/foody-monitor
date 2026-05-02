@@ -347,6 +347,7 @@
     <span class="status-dot" id="statusDot"></span>
   </div>
   <div class="header-right">
+    <span class="refresh-text" id="serverUptime" style="font-size:11px;color:#475569;"></span>
     <span class="refresh-text" id="refreshText">–</span>
     <button class="btn-icon" onclick="forceRefresh()" title="Atualizar agora">🔄</button>
     <button class="btn-icon" onclick="openLog()" title="Histórico do turno">📋</button>
@@ -475,6 +476,12 @@ async function fetchState() {
     lastServerUpdate  = state.lastUpdated;
     alertMinutes      = state.alertMinutes;
     readyOrdersCount  = state.readyOrdersCount;
+
+    if (state.serverStartedAt) {
+      const upMin = Math.floor((Date.now() - state.serverStartedAt) / 60000);
+      document.getElementById('serverUptime').textContent =
+        upMin < 1 ? '⚠️ servidor reiniciou agora' : `servidor: ${upMin}min no ar`;
+    }
 
     // Detecta alertas novos → toca som (ignora os que já existiam ao abrir)
     for (const alert of state.alerts) {
