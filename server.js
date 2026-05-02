@@ -21,18 +21,17 @@ if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR);
 let config = { cookie: '', alertMinutes: 15 };
 
 function loadConfig() {
+  // Env var como padrão inicial, arquivo sobrescreve (preserva atualizações do usuário)
+  if (process.env.FOODY_COOKIE) config.cookie = process.env.FOODY_COOKIE;
   try {
     const saved = JSON.parse(fs.readFileSync('./config.json', 'utf8'));
     if (saved.cookie) config.cookie = saved.cookie;
     if (saved.alertMinutes) config.alertMinutes = saved.alertMinutes;
   } catch (e) {}
-  if (process.env.FOODY_COOKIE) config.cookie = process.env.FOODY_COOKIE;
 }
 
 function saveConfig() {
-  const toSave = { ...config };
-  if (process.env.FOODY_COOKIE) delete toSave.cookie;
-  try { fs.writeFileSync('./config.json', JSON.stringify(toSave, null, 2)); } catch (e) {}
+  try { fs.writeFileSync('./config.json', JSON.stringify(config, null, 2)); } catch (e) {}
 }
 
 loadConfig();
@@ -333,7 +332,7 @@ app.post('/config', (req, res) => {
   if (req.body.alertMinutes) {
     config.alertMinutes = parseInt(req.body.alertMinutes) || 15;
   }
-  if (!process.env.FOODY_COOKIE) saveConfig();
+  saveConfig();
   res.json({ ok: true });
 });
 
