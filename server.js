@@ -146,8 +146,8 @@ function loadOnlineTimes() {
 
 loadOnlineTimes();
 
-function addAlert(type, msg) {
-  activeAlerts.unshift({ id: Date.now(), type, msg, time: new Date().toISOString() });
+function addAlert(type, msg, courierName = null) {
+  activeAlerts.unshift({ id: Date.now(), type, msg, time: new Date().toISOString(), courierName });
   if (activeAlerts.length > 30) activeAlerts.pop();
   appendLog({ type: 'alert', alertType: type, msg });
   console.log(`[ALERTA] ${msg}`);
@@ -221,7 +221,7 @@ function processTracking(trackingList, ordersByCourierList) {
     } else {
       if (cs.status === 'delivering') {
         cs.finishedAt  = finishedAt || now;
-        cs.statusSince = cs.finishedAt;
+        cs.statusSince = now;
         cs.alerted    = false;
       }
       if (cs.finishedAt) {
@@ -231,7 +231,7 @@ function processTracking(trackingList, ordersByCourierList) {
             cs.status = 'alert';
             if (!cs.alerted) {
               cs.alerted = true;
-              addAlert('slow', `${cs.name} terminou há ${Math.floor(elapsed)}min e tem pedido esperando!`);
+              addAlert('slow', `${cs.name} terminou há ${Math.floor(elapsed)}min e tem pedido esperando!`, cs.name);
             }
           } else if (elapsed >= config.alertMinutes * 0.65) {
             if (cs.status !== 'alert') cs.status = 'warning';
@@ -258,7 +258,7 @@ function processTracking(trackingList, ordersByCourierList) {
       cs.statusSince = now;
       cs.alerted    = true;
       appendLog({ type: 'status_change', courierName: cs.name, from: prev, to: 'missing' });
-      addAlert('missing', `${cs.name} sumiu do mapa!`);
+      addAlert('missing', `${cs.name} sumiu do mapa!`, cs.name);
     }
   }
 }

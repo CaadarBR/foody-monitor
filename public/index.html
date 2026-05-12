@@ -370,12 +370,6 @@
     <button class="btn-sm btn-outline" onclick="openSettings()">Atualizar</button>
   </div>
 
-  <!-- Alerts -->
-  <div id="alertsSection" style="display:none;">
-    <div class="section-title">⚠️ Alertas</div>
-    <div class="alerts-list" id="alertsList"></div>
-  </div>
-
   <!-- Couriers -->
   <div style="display:flex;align-items:center;justify-content:space-between;margin:16px 0 8px;">
     <div class="section-title" style="margin:0;">🏍️ Entregadores</div>
@@ -386,6 +380,20 @@
       <div class="icon">🔧</div>
       <p>Configure o cookie de sessão para começar</p>
     </div>
+  </div>
+
+  <!-- Active alerts -->
+  <div id="alertsSection" style="display:none;margin-top:16px;">
+    <div class="section-title">⚠️ Alertas</div>
+    <div class="alerts-list" id="alertsList"></div>
+  </div>
+
+  <!-- Histórico de alertas -->
+  <div id="alertsHistorySection" style="display:none;margin-top:8px;">
+    <button class="btn-sm btn-outline" style="font-size:11px;padding:3px 10px;" onclick="toggleAlertsHistory()">
+      📋 <span id="alertsHistoryToggleLabel">Ver histórico</span>
+    </button>
+    <div class="alerts-list" id="alertsHistoryList" style="display:none;margin-top:8px;"></div>
   </div>
 
 </main>
@@ -698,14 +706,8 @@ async function dismissAlert(id) {
   renderAlerts();
 }
 
-function renderAlerts() {
-  const section = document.getElementById('alertsSection');
-  const list    = document.getElementById('alertsList');
-
-  if (alerts.length === 0) { section.style.display = 'none'; return; }
-
-  section.style.display = 'block';
-  list.innerHTML = alerts.map(a => `
+function alertCardHtml(a) {
+  return `
     <div class="alert-card ${a.type === 'missing' ? 'danger' : 'warn'}">
       <span class="alert-icon">${a.type === 'missing' ? '🚨' : '⚠️'}</span>
       <div class="alert-body">
@@ -713,8 +715,50 @@ function renderAlerts() {
         <div class="alert-time">${new Date(a.time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
       </div>
       <button class="btn-dismiss" onclick="dismissAlert(${a.id})">✕</button>
-    </div>
-  `).join('');
+    </div>`;
+}
+
+function renderAlerts() {
+  const section        = document.getElementById('alertsSection');
+  const list           = document.getElementById('alertsList');
+  const histSection    = document.getElementById('alertsHistorySection');
+  const histList       = document.getElementById('alertsHistoryList');
+  const histLabel      = document.getElementById('alertsHistoryToggleLabel');
+
+  if (alerts.length === 0) {
+    section.style.display     = 'none';
+    histSection.style.display = 'none';
+    return;
+  }
+
+  const badStatuses = new Set(['alert', 'missing', 'warning']);
+  const activeCourierNames = new Set(
+    [...couriers.values()].filter(c => badStatuses.has(c.status)).map(c => c.name)
+  );
+
+  const active  = alerts.filter(a => a.courierName && activeCourierNames.has(a.courierName));
+  const history = alerts.filter(a => !a.courierName || !activeCourierNames.has(a.courierName));
+
+  section.style.display = active.length > 0 ? 'block' : 'none';
+  list.innerHTML = active.map(alertCardHtml).join('');
+
+  if (history.length > 0) {
+    histSection.style.display = 'block';
+    histLabel.textContent = histList.style.display === 'none'
+      ? `Ver histórico (${history.length})`
+      : `Ocultar histórico`;
+    histList.innerHTML = history.map(alertCardHtml).join('');
+  } else {
+    histSection.style.display = 'none';
+  }
+}
+
+function toggleAlertsHistory() {
+  const list  = document.getElementById('alertsHistoryList');
+  const label = document.getElementById('alertsHistoryToggleLabel');
+  const open  = list.style.display === 'none';
+  list.style.display = open ? 'block' : 'none';
+  renderAlerts();
 }
 
 // ─── Render couriers ──────────────────────────────────────────────────────────
@@ -755,9 +799,7 @@ function renderCouriers() {
     };
     const cfg = cfgMap[c.status];
 
-    const timerMs = c.status === 'delivering'
-      ? now - c.statusSince
-      : c.finishedAt ? now - c.finishedAt : now - c.statusSince;
+    const timerMs = now - c.statusSince;
 
     const vehicle = c.vehicleType === 'motorcycle' ? '🏍️ Moto' : '🚗 Carro';
 
