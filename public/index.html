@@ -799,7 +799,11 @@ function renderCouriers() {
     };
     const cfg = cfgMap[c.status];
 
-    const timerMs = now - c.statusSince;
+    // Para disponível sem entrega prévia: conta desde que entrou online (não desde agora)
+    const timerBase = (c.status === 'available' && !c.finishedAt && c.onlineAt)
+      ? c.onlineAt
+      : c.statusSince;
+    const timerMs = now - timerBase;
 
     const vehicle = c.vehicleType === 'motorcycle' ? '🏍️ Moto' : '🚗 Carro';
 
@@ -817,7 +821,7 @@ function renderCouriers() {
           <div class="timer-label">${cfg.timerLabel}</div>
         </div>
         <div class="card-footer">
-          <span>online desde ${new Date(c.statusSince).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</span>
+          <span>online desde ${new Date(c.onlineAt || c.statusSince).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</span>
           <span>visto ${fmtRelative(c.lastSeen)}</span>
         </div>
       </div>`;

@@ -135,9 +135,8 @@ function loadOnlineTimes() {
     const file = path.join(LOGS_DIR, `${operationalDate()}.json`);
     const logs = JSON.parse(fs.readFileSync(file, 'utf8'));
     for (const e of logs) {
-      if (e.type === 'courier_online' && !courierOnlineSince.has(e.courierName)) {
+      if (e.type === 'courier_online')
         courierOnlineSince.set(e.courierName, new Date(e.timestamp).getTime());
-      }
     }
     if (courierOnlineSince.size > 0)
       console.log(`[INFO] Horários de entrada restaurados: ${courierOnlineSince.size} entregadores.`);
@@ -193,6 +192,7 @@ function processTracking(trackingList, ordersByCourierList) {
         finishedAt,
         status,
         statusSince: finishedAt || onlineAt,
+        onlineAt,
         alerted: false,
       });
       continue;
@@ -207,7 +207,7 @@ function processTracking(trackingList, ordersByCourierList) {
 
     if (cs.status === 'missing') {
       cs.status     = activeOrders.length > 0 ? 'delivering' : 'available';
-      const onlineAt = courierOnlineSince.get(cs.name) || now;
+      const onlineAt = cs.onlineAt || courierOnlineSince.get(cs.name) || now;
       cs.statusSince = finishedAt || onlineAt;
       cs.finishedAt  = finishedAt;
       cs.alerted    = false;
@@ -274,8 +274,8 @@ async function doPoll() {
     if (today !== currentOpDate) {
       currentOpDate = today;
       courierMap.clear();
-      activeAlerts  = [];
       courierOnlineSince.clear();
+      activeAlerts  = [];
       hasLoggedStart = false;
       console.log('[INFO] Novo turno — estado resetado.');
     }
