@@ -660,7 +660,44 @@ async function saveSettings() {
   await fetchState();
 }
 
-// ─── Notifications ───────────────────────────────────────────────────────────
+// ─── Notifications + Push ────────────────────────────────────────────────────
+let swRegistration = null;
+
+async function initPush() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  try {
+    swRegistration = await navigator.serviceWorker.register('/sw.js');
+    await navigator.serviceWorker.ready;
+    if (Notification.permission === 'granted') await subscribeToPush();
+    else if (Notification.permission === 'default')
+      document.getElementById('notifBanner').style.display = 'flex';
+  } catch (e) {}
+}
+
+async function subscribeToPush() {
+  if (!swRegistration) return;
+  try {
+    const existing = await swRegistration.pushManager.getSubscription();
+    if (existing) return;
+    const { publicKey } = await fetch('/api/push/vapid-key').then(r => r.json());
+    const sub = await swRegistration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(publicKey),
+    });
+    await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(sub),
+    });
+  } catch (e) {}
+}
+
+function urlBase64ToUint8Array(b64) {
+  const pad = '='.repeat((4 - b64.length % 4) % 4);
+  const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
+  return new Uint8Array([...raw].map(c => c.charCodeAt(0)));
+}
+
 function checkNotifPermission() {
   if ('Notification' in window && Notification.permission === 'default') {
     document.getElementById('notifBanner').style.display = 'flex';
@@ -668,8 +705,9 @@ function checkNotifPermission() {
 }
 
 async function requestNotif() {
-  await Notification.requestPermission();
+  const perm = await Notification.requestPermission();
   document.getElementById('notifBanner').style.display = 'none';
+  if (perm === 'granted') await subscribeToPush();
 }
 
 function beep(freq = 880, duration = 0.4) {
@@ -885,9 +923,9 @@ function startTick() {
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 async function init() {
-  checkNotifPermission();
   await fetchState();
   startTick();
+  initPush();
 }
 
 init();

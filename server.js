@@ -2,6 +2,7 @@ const express = require('express');
 const fetch = require('node-fetch');
 const path = require('path');
 const fs = require('fs');
+const webpush = require('web-push');
 
 // Evita que erros inesperados derrubem o processo
 process.on('uncaughtException',  err  => console.error('[ERRO]', err));
@@ -31,8 +32,22 @@ function loadConfig() {
       const saved = JSON.parse(fs.readFileSync(f, 'utf8'));
       if (saved.cookie) config.cookie = saved.cookie;
       if (saved.alertMinutes) config.alertMinutes = saved.alertMinutes;
+      if (saved.vapidKeys) config.vapidKeys = saved.vapidKeys;
     } catch (e) {}
   }
+}
+
+function ensureVapidKeys() {
+  if (!config.vapidKeys) {
+    config.vapidKeys = webpush.generateVAPIDKeys();
+    saveConfig();
+    console.log('[INFO] Chaves VAPID geradas.');
+  }
+  webpush.setVapidDetails(
+    'mailto:varandaspizzaria.mcz@gmail.com',
+    config.vapidKeys.publicKey,
+    config.vapidKeys.privateKey
+  );
 }
 
 function saveConfig() {
@@ -40,6 +55,34 @@ function saveConfig() {
 }
 
 loadConfig();
+ensureVapidKeys();
+
+// ── Push subscriptions ────────────────────────────────────────────────────────
+
+const SUBS_FILE = path.join(LOGS_DIR, 'push-subscriptions.json');
+let pushSubscriptions = [];
+
+function loadSubscriptions() {
+  try { pushSubscriptions = JSON.parse(fs.readFileSync(SUBS_FILE, 'utf8')); } catch (e) {}
+}
+
+function saveSubscriptions() {
+  try { fs.writeFileSync(SUBS_FILE, JSON.stringify(pushSubscriptions, null, 2)); } catch (e) {}
+}
+
+async function sendPush(payload) {
+  if (!pushSubscriptions.length) return;
+  const dead = new Set();
+  await Promise.all(pushSubscriptions.map((sub, i) =>
+    webpush.sendNotification(sub, JSON.stringify(payload)).catch(() => dead.add(i))
+  ));
+  if (dead.size) {
+    pushSubscriptions = pushSubscriptions.filter((_, i) => !dead.has(i));
+    saveSubscriptions();
+  }
+}
+
+loadSubscriptions();
 
 // ── Logs ──────────────────────────────────────────────────────────────────────
 
@@ -156,6 +199,12 @@ function addAlert(type, msg, courierName = null) {
   if (activeAlerts.length > 30) activeAlerts.pop();
   appendLog({ type: 'alert', alertType: type, msg });
   console.log(`[ALERTA] ${msg}`);
+  sendPush({
+    title: type === 'missing' ? '🚨 Sumiu do mapa!' : '⚠️ Demora no retorno',
+    body: msg,
+    tag: `${type}-${courierName || Date.now()}`,
+    type,
+  }).catch(e => console.error('[PUSH]', e.message));
 }
 
 function processTracking(trackingList, ordersByCourierList) {
@@ -383,6 +432,29 @@ app.get('/api/logs', (req, res) => {
   } catch (e) {
     res.json({ dates: [] });
   }
+});
+
+// ── Push routes ───────────────────────────────────────────────────────────────
+
+app.get('/api/push/vapid-key', (req, res) => {
+  res.json({ publicKey: config.vapidKeys.publicKey });
+});
+
+app.post('/api/push/subscribe', (req, res) => {
+  const sub = req.body;
+  if (!sub?.endpoint) return res.status(400).json({ error: 'invalid' });
+  if (!pushSubscriptions.find(s => s.endpoint === sub.endpoint)) {
+    pushSubscriptions.push(sub);
+    saveSubscriptions();
+  }
+  res.json({ ok: true });
+});
+
+app.delete('/api/push/subscribe', (req, res) => {
+  const { endpoint } = req.body || {};
+  pushSubscriptions = pushSubscriptions.filter(s => s.endpoint !== endpoint);
+  saveSubscriptions();
+  res.json({ ok: true });
 });
 
 const PORT = process.env.PORT || 3000;
