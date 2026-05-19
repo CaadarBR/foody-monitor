@@ -273,8 +273,15 @@ async function doPoll() {
     const today = operationalDate();
     if (today !== currentOpDate) {
       currentOpDate = today;
+      // Preserva onlineAt dos entregadores ainda ativos ao virar o turno,
+      // para não zerar o timer de quem trabalha além da fronteira operacional.
+      const activeTimes = new Map();
+      for (const [, cs] of courierMap) {
+        if (cs.onlineAt) activeTimes.set(cs.name, cs.onlineAt);
+      }
       courierMap.clear();
       courierOnlineSince.clear();
+      for (const [name, time] of activeTimes) courierOnlineSince.set(name, time);
       activeAlerts  = [];
       hasLoggedStart = false;
       console.log('[INFO] Novo turno — estado resetado.');
