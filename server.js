@@ -117,7 +117,13 @@ function saveState() {
 function loadState() {
   try {
     const raw = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-    if (raw.opDate !== operationalDate()) return; // turno diferente, descarta
+    if (raw.opDate !== operationalDate()) {
+      // Turno diferente — descarta estado mas extrai onlineAt para não zerar timers
+      for (const [, cs] of (raw.couriers || [])) {
+        if (cs && cs.name && cs.onlineAt) courierOnlineSince.set(cs.name, cs.onlineAt);
+      }
+      return;
+    }
     for (const [id, cs] of raw.couriers) courierMap.set(id, cs);
     activeAlerts     = raw.activeAlerts     || [];
     readyOrdersCount = raw.readyOrdersCount || 0;
@@ -125,10 +131,10 @@ function loadState() {
   } catch (e) {}
 }
 
-loadState();
-
 // Guarda quando cada entregador apareceu pela primeira vez hoje
 const courierOnlineSince = new Map(); // nome → timestamp
+
+loadState();
 
 function loadOnlineTimes() {
   try {
