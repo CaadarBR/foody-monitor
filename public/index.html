@@ -468,6 +468,12 @@
       </div>
 
       <div class="form-group">
+        <label class="form-label">⚡ Intervalo de consulta ao Foody (ms)</label>
+        <input type="number" id="pollIntervalInput" value="10000" min="200" step="100">
+        <div class="help-box">Quanto menor, mais rápido atualiza — mas mais risco de o Foody bloquear ou derrubar a sessão.</div>
+      </div>
+
+      <div class="form-group">
         <label class="form-label">👥 Quem conectou (últimas 30)</label>
         <div id="visitsList" style="max-height:180px;overflow-y:auto;font-size:12px;color:var(--muted);"></div>
       </div>
@@ -725,6 +731,7 @@ async function loadAdminExtras() {
   if (access) {
     document.getElementById('desktopOnlyInput').checked = access.desktopOnly;
     document.getElementById('allowedIpsInput').value    = (access.allowedIps || []).join('\n');
+    document.getElementById('pollIntervalInput').value  = access.pollIntervalMs || 10000;
   }
 
   const data = await fetch('/api/admin/visits', { headers }).then(r => r.json()).catch(() => null);
@@ -751,11 +758,20 @@ function closeSettings() {
 }
 
 async function saveSettings() {
-  const cookie      = document.getElementById('cookieInput').value.trim();
-  const mins        = parseInt(document.getElementById('alertMinutes').value) || 15;
-  const desktopOnly = document.getElementById('desktopOnlyInput').checked;
-  const allowedIps  = document.getElementById('allowedIpsInput').value
+  const cookie         = document.getElementById('cookieInput').value.trim();
+  const mins           = parseInt(document.getElementById('alertMinutes').value) || 15;
+  const desktopOnly    = document.getElementById('desktopOnlyInput').checked;
+  const allowedIps     = document.getElementById('allowedIpsInput').value
     .split('\n').map(s => s.trim()).filter(Boolean);
+  const pollIntervalMs = Math.max(200, parseInt(document.getElementById('pollIntervalInput').value) || 10000);
+
+  if (pollIntervalMs < 3000) {
+    const ok = confirm(
+      `⚠️ Intervalo de ${pollIntervalMs}ms é bem agressivo (${Math.round(3600000 / pollIntervalMs)} consultas/hora).\n` +
+      `Risco real de o Foody bloquear ou derrubar a sessão. Quer continuar mesmo assim?`
+    );
+    if (!ok) return;
+  }
 
   const headers = { 'Content-Type': 'application/json', 'x-admin-password': adminPass };
 
@@ -764,7 +780,7 @@ async function saveSettings() {
 
   await Promise.all([
     fetch('/config', { method: 'POST', headers, body: JSON.stringify(body) }),
-    fetch('/api/admin/access', { method: 'POST', headers, body: JSON.stringify({ desktopOnly, allowedIps }) }),
+    fetch('/api/admin/access', { method: 'POST', headers, body: JSON.stringify({ desktopOnly, allowedIps, pollIntervalMs }) }),
   ]);
 
   alertMinutes = mins;

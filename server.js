@@ -48,6 +48,7 @@ let config = {
   adminPassword: '',   // senha do ADM MASTER (John) — protege Configurações/Acesso
   desktopOnly: true,   // trava de acesso: só computador, exceto IPs em allowedIps
   allowedIps: [],       // IPs liberados a acessar mesmo por celular
+  pollIntervalMs: 10000, // de quanto em quanto tempo consulta o Foody
 };
 
 function loadConfig() {
@@ -63,6 +64,7 @@ function loadConfig() {
       if (saved.adminPassword) config.adminPassword = saved.adminPassword;
       if (typeof saved.desktopOnly === 'boolean') config.desktopOnly = saved.desktopOnly;
       if (Array.isArray(saved.allowedIps)) config.allowedIps = saved.allowedIps;
+      if (saved.pollIntervalMs) config.pollIntervalMs = saved.pollIntervalMs;
     } catch (e) {}
   }
 }
@@ -476,8 +478,14 @@ async function doPoll() {
   }
 }
 
-setInterval(doPoll, 10 * 1000);
-doPoll();
+// Reagenda a cada ciclo lendo config.pollIntervalMs, pra dar pra mudar em tempo real pelo ADM MASTER
+function schedulePoll() {
+  setTimeout(async () => {
+    await doPoll();
+    schedulePoll();
+  }, Math.max(200, config.pollIntervalMs || 10000));
+}
+schedulePoll();
 
 // ── Rotas HTTP ────────────────────────────────────────────────────────────────
 
@@ -576,7 +584,11 @@ app.get('/api/admin/visits', (req, res) => {
 
 app.get('/api/admin/access', (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'unauthorized' });
-  res.json({ desktopOnly: config.desktopOnly !== false, allowedIps: config.allowedIps || [] });
+  res.json({
+    desktopOnly:    config.desktopOnly !== false,
+    allowedIps:     config.allowedIps || [],
+    pollIntervalMs: config.pollIntervalMs || 10000,
+  });
 });
 
 app.post('/api/admin/access', (req, res) => {
@@ -584,6 +596,9 @@ app.post('/api/admin/access', (req, res) => {
   if (typeof req.body.desktopOnly === 'boolean') config.desktopOnly = req.body.desktopOnly;
   if (Array.isArray(req.body.allowedIps)) {
     config.allowedIps = req.body.allowedIps.map(s => String(s).trim()).filter(Boolean);
+  }
+  if (req.body.pollIntervalMs) {
+    config.pollIntervalMs = Math.max(200, parseInt(req.body.pollIntervalMs) || 10000);
   }
   saveConfig();
   res.json({ ok: true });
