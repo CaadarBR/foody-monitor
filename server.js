@@ -200,7 +200,7 @@ function addAlert(type, msg, courierName = null) {
   appendLog({ type: 'alert', alertType: type, msg });
   console.log(`[ALERTA] ${msg}`);
   sendPush({
-    title: type === 'missing' ? '🚨 Sumiu do mapa!' : '⚠️ Demora no retorno',
+    title: type === 'missing' ? '🚨 Sumiu do mapa!' : type === 'single' ? '✅ Saiu com 1 entrega' : '⚠️ Demora no retorno',
     body: msg,
     tag: `${type}-${courierName || Date.now()}`,
     type,
@@ -272,6 +272,9 @@ function processTracking(trackingList, ordersByCourierList) {
         cs.statusSince = now;
         cs.finishedAt  = null;
         cs.alerted    = false;
+        if (activeOrders.length === 1) {
+          addAlert('single', `${cs.name} saiu para entrega com apenas 1 pedido!`, cs.name);
+        }
       }
     } else {
       if (cs.status === 'delivering') {

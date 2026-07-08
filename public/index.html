@@ -123,6 +123,7 @@
     }
     .alert-card.danger { background: #3b0a0a; border: 1px solid rgba(239,68,68,0.5); }
     .alert-card.warn   { background: #3b1f0a; border: 1px solid rgba(249,115,22,0.5); }
+    .alert-card.good   { background: #0a3b1f; border: 1px solid rgba(34,197,94,0.5); }
 
     .alert-icon  { font-size: 18px; margin-top: 1px; flex-shrink: 0; }
     .alert-body  { flex: 1; }
@@ -497,7 +498,7 @@ async function fetchState() {
         knownAlertIds.add(alert.id);
         if (!firstLoad) {
           pushNotification(
-            alert.type === 'missing' ? '🚨 Sumiu do mapa!' : '⚠️ Demora no retorno',
+            alert.type === 'missing' ? '🚨 Sumiu do mapa!' : alert.type === 'single' ? '✅ Saiu com 1 entrega' : '⚠️ Demora no retorno',
             alert.msg
           );
         }
@@ -612,8 +613,8 @@ function renderLog() {
       </div>`;
 
     if (e.type === 'alert') return `
-      <div class="log-entry log-danger">
-        <span class="log-time">${time}</span><span>${e.alertType === 'missing' ? '🚨' : '⚠️'}</span>
+      <div class="log-entry ${e.alertType === 'single' ? 'log-success' : 'log-danger'}">
+        <span class="log-time">${time}</span><span>${e.alertType === 'missing' ? '🚨' : e.alertType === 'single' ? '✅' : '⚠️'}</span>
         <span>${e.msg}</span>
       </div>`;
 
@@ -745,9 +746,11 @@ async function dismissAlert(id) {
 }
 
 function alertCardHtml(a) {
+  const cls  = a.type === 'missing' ? 'danger' : a.type === 'single' ? 'good' : 'warn';
+  const icon = a.type === 'missing' ? '🚨' : a.type === 'single' ? '✅' : '⚠️';
   return `
-    <div class="alert-card ${a.type === 'missing' ? 'danger' : 'warn'}">
-      <span class="alert-icon">${a.type === 'missing' ? '🚨' : '⚠️'}</span>
+    <div class="alert-card ${cls}">
+      <span class="alert-icon">${icon}</span>
       <div class="alert-body">
         <div class="alert-msg">${a.msg}</div>
         <div class="alert-time">${new Date(a.time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
