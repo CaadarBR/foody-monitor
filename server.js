@@ -11,7 +11,28 @@ process.on('unhandledRejection', reason => console.error('[PROMISE]', reason));
 const SERVER_STARTED_AT = Date.now();
 
 const app = express();
+app.set('trust proxy', true);
 app.use(express.json());
+
+// ── Trava de acesso por dispositivo + IP liberado ─────────────────────────────
+// Por padrão só libera computador. Celulares só passam se o IP estiver em config.allowedIps.
+app.use((req, res, next) => {
+  if (config.desktopOnly === false) return next();
+  const ip = (req.ip || '').replace('::ffff:', '');
+  if ((config.allowedIps || []).includes(ip)) return next();
+  const ua = req.headers['user-agent'] || '';
+  if (/mobi|android|iphone|ipad|ipod/i.test(ua)) {
+    return res.status(403).send(
+      '<!doctype html><html><head><meta charset="utf-8"><title>Acesso restrito</title></head>' +
+      '<body style="font-family:sans-serif;background:#0f172a;color:#f1f5f9;display:flex;' +
+      'align-items:center;justify-content:center;height:100vh;margin:0;text-align:center;padding:20px;">' +
+      '<div><h2>🔒 Acesso restrito</h2><p>Este painel só pode ser aberto por computador.</p></div>' +
+      '</body></html>'
+    );
+  }
+  next();
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 const LOGS_DIR = path.join(__dirname, 'logs');
@@ -22,10 +43,16 @@ if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR);
 
 const CONFIG_FILE = path.join(LOGS_DIR, 'config.json');
 
-let config = { cookie: '', alertMinutes: 15 };
+let config = {
+  cookie: '', alertMinutes: 15,
+  adminPassword: '',   // senha do ADM MASTER (John) — protege Configurações/Acesso
+  desktopOnly: true,   // trava de acesso: só computador, exceto IPs em allowedIps
+  allowedIps: [],       // IPs liberados a acessar mesmo por celular
+};
 
 function loadConfig() {
   if (process.env.FOODY_COOKIE) config.cookie = process.env.FOODY_COOKIE;
+  if (process.env.ADMIN_PASSWORD) config.adminPassword = process.env.ADMIN_PASSWORD;
   // Tenta localização antiga (./config.json) para migrar cookie existente
   for (const f of ['./config.json', CONFIG_FILE]) {
     try {
@@ -33,6 +60,9 @@ function loadConfig() {
       if (saved.cookie) config.cookie = saved.cookie;
       if (saved.alertMinutes) config.alertMinutes = saved.alertMinutes;
       if (saved.vapidKeys) config.vapidKeys = saved.vapidKeys;
+      if (saved.adminPassword) config.adminPassword = saved.adminPassword;
+      if (typeof saved.desktopOnly === 'boolean') config.desktopOnly = saved.desktopOnly;
+      if (Array.isArray(saved.allowedIps)) config.allowedIps = saved.allowedIps;
     } catch (e) {}
   }
 }
@@ -83,6 +113,53 @@ async function sendPush(payload) {
 }
 
 loadSubscriptions();
+
+// ── Registro de visitantes (IP, dispositivo, SO, navegador) ──────────────────
+
+const VISITS_FILE = path.join(LOGS_DIR, 'visits.json');
+let visits = [];
+
+function loadVisits() {
+  try { visits = JSON.parse(fs.readFileSync(VISITS_FILE, 'utf8')); } catch (e) {}
+}
+function saveVisits() {
+  try { fs.writeFileSync(VISITS_FILE, JSON.stringify(visits, null, 2)); } catch (e) {}
+}
+loadVisits();
+
+function parseUserAgent(ua) {
+  ua = ua || '';
+  let os = 'Desconhecido';
+  if (/windows nt 10/i.test(ua))            os = 'Windows 10/11';
+  else if (/windows nt 6\.3/i.test(ua))     os = 'Windows 8.1';
+  else if (/windows nt 6\.1/i.test(ua))     os = 'Windows 7';
+  else if (/windows/i.test(ua))             os = 'Windows';
+  else if (/android\s([\d.]+)/i.test(ua))   os = `Android ${RegExp.$1}`;
+  else if (/iphone os ([\d_]+)/i.test(ua))  os = `iOS ${RegExp.$1.replace(/_/g, '.')}`;
+  else if (/ipad.*os ([\d_]+)/i.test(ua))   os = `iPadOS ${RegExp.$1.replace(/_/g, '.')}`;
+  else if (/mac os x ([\d_]+)/i.test(ua))   os = `macOS ${RegExp.$1.replace(/_/g, '.')}`;
+  else if (/linux/i.test(ua))               os = 'Linux';
+
+  let browser = 'Desconhecido';
+  if (/edg\//i.test(ua))                              browser = 'Edge';
+  else if (/opr\//i.test(ua))                         browser = 'Opera';
+  else if (/chrome\//i.test(ua) && !/edg\/|opr\//i.test(ua)) browser = 'Chrome';
+  else if (/firefox\//i.test(ua))                     browser = 'Firefox';
+  else if (/safari\//i.test(ua) && !/chrome\//i.test(ua))    browser = 'Safari';
+
+  const isTablet = /ipad|tablet/i.test(ua);
+  const isMobile = !isTablet && /mobi|android|iphone|ipod/i.test(ua);
+
+  // Modelo só costuma aparecer em Android (ex: "; SM-G991B Build/"). iOS não expõe modelo por privacidade.
+  let model = null;
+  const m = ua.match(/;\s*([A-Za-z0-9\- ]+)\sBuild\//);
+  if (m) model = m[1].trim();
+
+  return {
+    os, browser, model,
+    deviceType: isTablet ? 'tablet' : isMobile ? 'celular' : 'computador',
+  };
+}
 
 // ── Logs ──────────────────────────────────────────────────────────────────────
 
@@ -143,6 +220,8 @@ let pollRunning      = false;
 let hasLoggedStart   = false;
 let currentOpDate    = operationalDate();
 
+let lastCookieAlertAt = 0;
+
 const STATE_FILE = path.join(LOGS_DIR, 'state.json');
 
 function saveState() {
@@ -200,11 +279,18 @@ function addAlert(type, msg, courierName = null) {
   appendLog({ type: 'alert', alertType: type, msg });
   console.log(`[ALERTA] ${msg}`);
   sendPush({
-    title: type === 'missing' ? '🚨 Sumiu do mapa!' : type === 'single' ? '✅ Saiu com 1 entrega' : '⚠️ Demora no retorno',
+    title: type === 'missing' ? '🚨 Sumiu do mapa!'
+      : type === 'single'    ? '✅ Saiu com 1 entrega'
+      : type === 'cookie'    ? '🍪 Cookie expirado!'
+      : '⚠️ Demora no retorno',
     body: msg,
     tag: `${type}-${courierName || Date.now()}`,
     type,
   }).catch(e => console.error('[PUSH]', e.message));
+}
+
+function orderNumberOf(o) {
+  return o.orderNumber ?? o.number ?? o.code ?? o.orderCode ?? o.orderId ?? o.id ?? null;
 }
 
 function processTracking(trackingList, ordersByCourierList) {
@@ -225,9 +311,14 @@ function processTracking(trackingList, ordersByCourierList) {
     const deliveredOrders = all.filter(o => o.status === 'delivered' && o.deliveryDate);
 
     let finishedAt = null;
+    let lastOrderNumber = null;
     if (activeOrders.length === 0 && deliveredOrders.length > 0) {
       const raw = Math.max(...deliveredOrders.map(o => new Date(o.deliveryDate).getTime()));
       finishedAt = Math.min(raw, now); // nunca usar timestamp futuro (possível offset de fuso)
+      const last = deliveredOrders.reduce((a, b) =>
+        new Date(a.deliveryDate).getTime() >= new Date(b.deliveryDate).getTime() ? a : b
+      );
+      lastOrderNumber = orderNumberOf(last);
     }
 
     if (!courierMap.has(id)) {
@@ -245,6 +336,7 @@ function processTracking(trackingList, ordersByCourierList) {
         lat: tc.latitute, lng: tc.longitude,
         activeOrderCount: activeOrders.length,
         finishedAt,
+        lastOrderNumber,
         status,
         statusSince: finishedAt || onlineAt,
         onlineAt,
@@ -259,6 +351,7 @@ function processTracking(trackingList, ordersByCourierList) {
     cs.lat = tc.latitute;
     cs.lng = tc.longitude;
     cs.activeOrderCount = activeOrders.length;
+    if (lastOrderNumber != null) cs.lastOrderNumber = lastOrderNumber;
 
     if (cs.status === 'missing') {
       cs.status     = activeOrders.length > 0 ? 'delivering' : 'available';
@@ -366,20 +459,30 @@ async function doPoll() {
     sessionOk   = true;
     saveState();
   } catch (e) {
+    const wasOk = sessionOk;
     sessionOk = false;
     console.error('[POLL]', e.message);
+
+    // Avisa por push quando a sessão do Foody cai, pra não depender de alguém
+    // abrir o site pra descobrir que o cookie expirou.
+    const now = Date.now();
+    if (wasOk || now - lastCookieAlertAt > 30 * 60 * 1000) {
+      lastCookieAlertAt = now;
+      addAlert('cookie', 'Cookie do Foody expirou ou sessão caiu — abra o monitor e atualize o cookie nas Configurações!');
+    }
   } finally {
     pollRunning = false;
+    broadcastState();
   }
 }
 
-setInterval(doPoll, 30 * 1000);
+setInterval(doPoll, 10 * 1000);
 doPoll();
 
 // ── Rotas HTTP ────────────────────────────────────────────────────────────────
 
-app.get('/api/state', (req, res) => {
-  res.json({
+function buildStatePayload() {
+  return {
     configured:       !!config.cookie,
     sessionOk,
     lastUpdated,
@@ -388,8 +491,38 @@ app.get('/api/state', (req, res) => {
     couriers:         [...courierMap.values()],
     alerts:           activeAlerts,
     serverStartedAt:  SERVER_STARTED_AT,
-  });
+  };
+}
+
+app.get('/api/state', (req, res) => {
+  res.json(buildStatePayload());
 });
+
+// ── Tempo real (Server-Sent Events) ──────────────────────────────────────────
+
+const sseClients = new Set();
+
+function broadcastState() {
+  const data = `data: ${JSON.stringify(buildStatePayload())}\n\n`;
+  for (const res of sseClients) res.write(data);
+}
+
+app.get('/api/stream', (req, res) => {
+  res.set({
+    'Content-Type':  'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection':    'keep-alive',
+  });
+  res.flushHeaders();
+  res.write(`data: ${JSON.stringify(buildStatePayload())}\n\n`);
+  sseClients.add(res);
+  req.on('close', () => sseClients.delete(res));
+});
+
+// Mantém as conexões SSE vivas atrás do proxy do EasyPanel
+setInterval(() => {
+  for (const res of sseClients) res.write(':keep-alive\n\n');
+}, 20 * 1000);
 
 app.post('/api/alerts/dismiss', (req, res) => {
   const { id } = req.body;
@@ -401,7 +534,14 @@ app.get('/config', (req, res) => {
   res.json({ configured: !!config.cookie, usingEnv: !!process.env.FOODY_COOKIE });
 });
 
+function isAdmin(req) {
+  return !!config.adminPassword && req.headers['x-admin-password'] === config.adminPassword;
+}
+
 app.post('/config', (req, res) => {
+  if (config.adminPassword && !isAdmin(req)) {
+    return res.status(401).json({ ok: false, error: 'unauthorized' });
+  }
   if (req.body.cookie) {
     config.cookie  = req.body.cookie.trim();
     hasLoggedStart = false;
@@ -412,6 +552,62 @@ app.post('/config', (req, res) => {
     config.alertMinutes = parseInt(req.body.alertMinutes) || 15;
   }
   saveConfig();
+  res.json({ ok: true });
+});
+
+// ── ADM MASTER (John) ─────────────────────────────────────────────────────────
+
+app.post('/api/admin/verify', (req, res) => {
+  const { password } = req.body || {};
+  if (!password) return res.status(400).json({ ok: false });
+  if (!config.adminPassword) {
+    // Primeira senha cadastrada vira a senha do ADM MASTER
+    config.adminPassword = password;
+    saveConfig();
+    return res.json({ ok: true, created: true });
+  }
+  res.json({ ok: config.adminPassword === password });
+});
+
+app.get('/api/admin/visits', (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ error: 'unauthorized' });
+  res.json({ visits });
+});
+
+app.get('/api/admin/access', (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ error: 'unauthorized' });
+  res.json({ desktopOnly: config.desktopOnly !== false, allowedIps: config.allowedIps || [] });
+});
+
+app.post('/api/admin/access', (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ error: 'unauthorized' });
+  if (typeof req.body.desktopOnly === 'boolean') config.desktopOnly = req.body.desktopOnly;
+  if (Array.isArray(req.body.allowedIps)) {
+    config.allowedIps = req.body.allowedIps.map(s => String(s).trim()).filter(Boolean);
+  }
+  saveConfig();
+  res.json({ ok: true });
+});
+
+app.post('/api/track', (req, res) => {
+  const ua     = req.headers['user-agent'] || '';
+  const parsed = parseUserAgent(ua);
+  const extra  = req.body || {};
+  visits.unshift({
+    ip:         (req.ip || '').replace('::ffff:', ''),
+    time:       new Date().toISOString(),
+    os:         parsed.os,
+    browser:    parsed.browser,
+    deviceType: parsed.deviceType,
+    model:      parsed.model,
+    screen:     extra.screen   || null,
+    lang:       extra.lang     || null,
+    tz:         extra.tz       || null,
+    platform:   extra.platform || null,
+    ua,
+  });
+  if (visits.length > 500) visits.length = 500;
+  saveVisits();
   res.json({ ok: true });
 });
 

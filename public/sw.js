@@ -10,7 +10,7 @@ self.addEventListener('push', e => {
       return self.registration.showNotification(data.title || '🍕 Foody Monitor', {
         body: data.body || '',
         tag: data.tag || 'alert',
-        requireInteraction: data.type === 'missing',
+        requireInteraction: data.type === 'missing' || data.type === 'cookie',
         vibrate: [200, 100, 200],
         data: { url: self.registration.scope },
       });

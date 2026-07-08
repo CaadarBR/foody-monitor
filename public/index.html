@@ -181,6 +181,8 @@
     .badge-alert      { background: rgba(239,68,68,0.18);   color: #fca5a5; }
     .badge-missing    { background: rgba(239,68,68,0.10);   color: #f87171; }
 
+    .last-order { font-size: 10px; color: var(--muted); }
+
     .timer-block { text-align: center; padding: 8px 0 4px; }
 
     .timer {
@@ -424,28 +426,56 @@
   <div class="modal">
     <div class="modal-title">⚙️ Configurações</div>
 
-    <div class="form-group">
-      <label class="form-label">Cookie de sessão</label>
-      <textarea id="cookieInput" placeholder="Cole aqui o valor completo do cookie..."></textarea>
-      <div class="help-box">
-        <b>Como obter o cookie:</b><br>
-        1. Abra o Foody Delivery no Chrome e faça login<br>
-        2. Pressione <b>F12</b> → aba <b>Rede</b> (Network)<br>
-        3. Atualize a página (F5)<br>
-        4. Clique em qualquer requisição para <b>app.foodydelivery.com</b><br>
-        5. Em "Cabeçalhos de Requisição" copie o valor de <b>cookie:</b><br>
-        6. Cole aqui e salve
+    <!-- Trava de acesso: só o ADM MASTER (John) entra aqui -->
+    <div id="adminGate">
+      <div class="form-group">
+        <label class="form-label">Senha do ADM MASTER</label>
+        <input type="password" id="adminPassInput" placeholder="Digite a senha do John...">
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeSettings()">Cancelar</button>
+        <button class="btn btn-primary" onclick="submitAdminPassword()">Entrar</button>
       </div>
     </div>
 
-    <div class="form-group">
-      <label class="form-label">Tempo de alerta (minutos)</label>
-      <input type="number" id="alertMinutes" value="15" min="1" max="120">
-    </div>
+    <div id="adminContent" style="display:none;">
+      <div class="form-group">
+        <label class="form-label">Cookie de sessão</label>
+        <textarea id="cookieInput" placeholder="Cole aqui o valor completo do cookie..."></textarea>
+        <div class="help-box">
+          <b>Como obter o cookie:</b><br>
+          1. Abra o Foody Delivery no Chrome e faça login<br>
+          2. Pressione <b>F12</b> → aba <b>Rede</b> (Network)<br>
+          3. Atualize a página (F5)<br>
+          4. Clique em qualquer requisição para <b>app.foodydelivery.com</b><br>
+          5. Em "Cabeçalhos de Requisição" copie o valor de <b>cookie:</b><br>
+          6. Cole aqui e salve
+        </div>
+      </div>
 
-    <div class="modal-actions">
-      <button class="btn btn-secondary" onclick="closeSettings()">Cancelar</button>
-      <button class="btn btn-primary" onclick="saveSettings()">Salvar</button>
+      <div class="form-group">
+        <label class="form-label">Tempo de alerta (minutos)</label>
+        <input type="number" id="alertMinutes" value="15" min="1" max="120">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">🔒 Acesso ao painel</label>
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:400;margin-bottom:8px;">
+          <input type="checkbox" id="desktopOnlyInput" style="width:auto;">
+          Permitir só por computador (bloqueia celular, exceto IPs liberados)
+        </label>
+        <textarea id="allowedIpsInput" placeholder="IPs liberados p/ acessar mesmo por celular, um por linha..." style="min-height:60px;"></textarea>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">👥 Quem conectou (últimas 30)</label>
+        <div id="visitsList" style="max-height:180px;overflow-y:auto;font-size:12px;color:var(--muted);"></div>
+      </div>
+
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeSettings()">Cancelar</button>
+        <button class="btn btn-primary" onclick="saveSettings()">Salvar</button>
+      </div>
     </div>
   </div>
 </div>
@@ -459,63 +489,85 @@ let readyOrdersCount = 0;
 let lastServerUpdate = null;
 let knownAlertIds    = new Set();
 let firstLoad        = true;
-let countdown        = 10;
 let tickInterval     = null;
 
 // ─── Busca estado do servidor ─────────────────────────────────────────────────
+function applyState(state) {
+  if (!state.configured) {
+    setStatus('error');
+    openSettings();
+    return;
+  }
+
+  if (!state.sessionOk) {
+    setStatus('error');
+    document.getElementById('sessionBanner').style.display = 'flex';
+    return;
+  }
+
+  document.getElementById('sessionBanner').style.display = 'none';
+  setStatus('ok');
+
+  lastServerUpdate  = state.lastUpdated;
+  alertMinutes      = state.alertMinutes;
+  readyOrdersCount  = state.readyOrdersCount;
+
+  if (state.serverStartedAt) {
+    const upMin = Math.floor((Date.now() - state.serverStartedAt) / 60000);
+    document.getElementById('serverUptime').textContent =
+      upMin < 1 ? '⚠️ servidor reiniciou agora' : `servidor: ${upMin}min no ar`;
+  }
+
+  // Detecta alertas novos → toca som (ignora os que já existiam ao abrir)
+  for (const alert of state.alerts) {
+    if (!knownAlertIds.has(alert.id)) {
+      knownAlertIds.add(alert.id);
+      if (!firstLoad) {
+        pushNotification(
+          alert.type === 'missing' ? '🚨 Sumiu do mapa!'
+            : alert.type === 'single' ? '✅ Saiu com 1 entrega'
+            : alert.type === 'cookie' ? '🍪 Cookie expirado!'
+            : '⚠️ Demora no retorno',
+          alert.msg
+        );
+      }
+    }
+  }
+  firstLoad = false;
+
+  alerts = state.alerts;
+  couriers.clear();
+  for (const c of state.couriers) couriers.set(c.id, c);
+
+  document.getElementById('refreshText').textContent = 'ao vivo';
+  renderAlerts();
+  renderCouriers();
+  renderReadyBadge();
+}
+
 async function fetchState() {
   try {
     const state = await fetch('/api/state').then(r => r.json());
-
-    if (!state.configured) {
-      setStatus('error');
-      openSettings();
-      return;
-    }
-
-    if (!state.sessionOk) {
-      setStatus('error');
-      document.getElementById('sessionBanner').style.display = 'flex';
-      return;
-    }
-
-    document.getElementById('sessionBanner').style.display = 'none';
-    setStatus('ok');
-
-    lastServerUpdate  = state.lastUpdated;
-    alertMinutes      = state.alertMinutes;
-    readyOrdersCount  = state.readyOrdersCount;
-
-    if (state.serverStartedAt) {
-      const upMin = Math.floor((Date.now() - state.serverStartedAt) / 60000);
-      document.getElementById('serverUptime').textContent =
-        upMin < 1 ? '⚠️ servidor reiniciou agora' : `servidor: ${upMin}min no ar`;
-    }
-
-    // Detecta alertas novos → toca som (ignora os que já existiam ao abrir)
-    for (const alert of state.alerts) {
-      if (!knownAlertIds.has(alert.id)) {
-        knownAlertIds.add(alert.id);
-        if (!firstLoad) {
-          pushNotification(
-            alert.type === 'missing' ? '🚨 Sumiu do mapa!' : alert.type === 'single' ? '✅ Saiu com 1 entrega' : '⚠️ Demora no retorno',
-            alert.msg
-          );
-        }
-      }
-    }
-    firstLoad = false;
-
-    alerts = state.alerts;
-    couriers.clear();
-    for (const c of state.couriers) couriers.set(c.id, c);
-
-    renderAlerts();
-    renderCouriers();
-    renderReadyBadge();
+    applyState(state);
   } catch (e) {
     setStatus('error');
   }
+}
+
+// ─── Tempo real (Server-Sent Events) ─────────────────────────────────────────
+let eventSource = null;
+
+function connectStream() {
+  if (eventSource) eventSource.close();
+  eventSource = new EventSource('/api/stream');
+  eventSource.onmessage = e => {
+    try { applyState(JSON.parse(e.data)); } catch (err) {}
+  };
+  eventSource.onerror = () => {
+    eventSource.close();
+    setStatus('error');
+    setTimeout(connectStream, 3000);
+  };
 }
 
 // ─── Log Viewer ──────────────────────────────────────────────────────────────
@@ -614,7 +666,7 @@ function renderLog() {
 
     if (e.type === 'alert') return `
       <div class="log-entry ${e.alertType === 'single' ? 'log-success' : 'log-danger'}">
-        <span class="log-time">${time}</span><span>${e.alertType === 'missing' ? '🚨' : e.alertType === 'single' ? '✅' : '⚠️'}</span>
+        <span class="log-time">${time}</span><span>${e.alertType === 'missing' ? '🚨' : e.alertType === 'cookie' ? '🍪' : e.alertType === 'single' ? '✅' : '⚠️'}</span>
         <span>${e.msg}</span>
       </div>`;
 
@@ -627,10 +679,71 @@ function fmtDateBR(dateStr) {
   return `${d}/${m}/${y}`;
 }
 
-// ─── Settings ────────────────────────────────────────────────────────────────
-function openSettings() {
-  document.getElementById('alertMinutes').value = alertMinutes;
+// ─── Settings / ADM MASTER ────────────────────────────────────────────────────
+let adminPass       = localStorage.getItem('admMasterPass') || '';
+let isAdminUnlocked = false;
+
+async function verifyAdmin(pass) {
+  const r = await fetch('/api/admin/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: pass }),
+  }).then(r => r.json()).catch(() => ({ ok: false }));
+
+  if (r.ok) {
+    adminPass = pass;
+    localStorage.setItem('admMasterPass', pass);
+    isAdminUnlocked = true;
+  }
+  return r.ok;
+}
+
+async function submitAdminPassword() {
+  const pass = document.getElementById('adminPassInput').value;
+  const ok   = await verifyAdmin(pass);
+  if (ok) {
+    document.getElementById('adminPassInput').value = '';
+    await renderSettingsGate();
+  } else {
+    alert('Senha incorreta.');
+  }
+}
+
+async function renderSettingsGate() {
+  document.getElementById('adminGate').style.display    = isAdminUnlocked ? 'none'  : 'block';
+  document.getElementById('adminContent').style.display  = isAdminUnlocked ? 'block' : 'none';
+  if (isAdminUnlocked) {
+    document.getElementById('alertMinutes').value = alertMinutes;
+    await loadAdminExtras();
+  }
+}
+
+async function loadAdminExtras() {
+  const headers = { 'x-admin-password': adminPass };
+
+  const access = await fetch('/api/admin/access', { headers }).then(r => r.json()).catch(() => null);
+  if (access) {
+    document.getElementById('desktopOnlyInput').checked = access.desktopOnly;
+    document.getElementById('allowedIpsInput').value    = (access.allowedIps || []).join('\n');
+  }
+
+  const data = await fetch('/api/admin/visits', { headers }).then(r => r.json()).catch(() => null);
+  const list = document.getElementById('visitsList');
+  const items = (data?.visits || []).slice(0, 30);
+  list.innerHTML = items.length ? items.map(v => {
+    const time = new Date(v.time).toLocaleString('pt-BR');
+    return `<div style="padding:4px 0;border-bottom:1px solid var(--border);">
+      ${time} — <b>${v.ip}</b> — ${v.deviceType} ${v.model ? `(${v.model})` : ''} — ${v.os} / ${v.browser}
+    </div>`;
+  }).join('') : '<div>Nenhum acesso registrado ainda.</div>';
+}
+
+async function openSettings() {
   document.getElementById('settingsModal').classList.add('open');
+  if (!isAdminUnlocked && adminPass) {
+    await verifyAdmin(adminPass);
+  }
+  await renderSettingsGate();
 }
 
 function closeSettings() {
@@ -638,17 +751,21 @@ function closeSettings() {
 }
 
 async function saveSettings() {
-  const cookie = document.getElementById('cookieInput').value.trim();
-  const mins   = parseInt(document.getElementById('alertMinutes').value) || 15;
+  const cookie      = document.getElementById('cookieInput').value.trim();
+  const mins        = parseInt(document.getElementById('alertMinutes').value) || 15;
+  const desktopOnly = document.getElementById('desktopOnlyInput').checked;
+  const allowedIps  = document.getElementById('allowedIpsInput').value
+    .split('\n').map(s => s.trim()).filter(Boolean);
+
+  const headers = { 'Content-Type': 'application/json', 'x-admin-password': adminPass };
 
   const body = { alertMinutes: mins };
   if (cookie) body.cookie = cookie;
 
-  await fetch('/config', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  await Promise.all([
+    fetch('/config', { method: 'POST', headers, body: JSON.stringify(body) }),
+    fetch('/api/admin/access', { method: 'POST', headers, body: JSON.stringify({ desktopOnly, allowedIps }) }),
+  ]);
 
   alertMinutes = mins;
 
@@ -659,6 +776,21 @@ async function saveSettings() {
 
   closeSettings();
   await fetchState();
+}
+
+async function trackVisit() {
+  try {
+    await fetch('/api/track', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        screen:   `${screen.width}x${screen.height}`,
+        lang:     navigator.language,
+        tz:       Intl.DateTimeFormat().resolvedOptions().timeZone,
+        platform: navigator.platform,
+      }),
+    });
+  } catch (e) {}
 }
 
 // ─── Notifications + Push ────────────────────────────────────────────────────
@@ -746,8 +878,8 @@ async function dismissAlert(id) {
 }
 
 function alertCardHtml(a) {
-  const cls  = a.type === 'missing' ? 'danger' : a.type === 'single' ? 'good' : 'warn';
-  const icon = a.type === 'missing' ? '🚨' : a.type === 'single' ? '✅' : '⚠️';
+  const cls  = a.type === 'missing' || a.type === 'cookie' ? 'danger' : a.type === 'single' ? 'good' : 'warn';
+  const icon = a.type === 'missing' ? '🚨' : a.type === 'cookie' ? '🍪' : a.type === 'single' ? '✅' : '⚠️';
   return `
     <div class="alert-card ${cls}">
       <span class="alert-icon">${icon}</span>
@@ -855,7 +987,10 @@ function renderCouriers() {
             <div class="courier-name">${c.name}</div>
             <div class="courier-vehicle">${vehicle}</div>
           </div>
-          <span class="badge ${cfg.badge}">${cfg.label}</span>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
+            <span class="badge ${cfg.badge}">${cfg.label}</span>
+            ${c.status === 'available' && c.lastOrderNumber ? `<span class="last-order">#${c.lastOrderNumber}</span>` : ''}
+          </div>
         </div>
         <div class="timer-block">
           <div class="timer ${cfg.timerClass}">${fmtDuration(timerMs)}</div>
@@ -893,42 +1028,22 @@ function fmtRelative(ts) {
 
 // ─── Tick ─────────────────────────────────────────────────────────────────────
 async function forceRefresh() {
-  countdown = 0;
   document.getElementById('refreshText').textContent = 'atualizando...';
   await fetchState();
-  countdown = 10;
 }
 
 function startTick() {
   clearInterval(tickInterval);
-  countdown = 10;
-
-  tickInterval = setInterval(() => {
-    countdown--;
-
-    if (lastServerUpdate) {
-      const ago = Math.floor((Date.now() - lastServerUpdate) / 1000);
-      document.getElementById('refreshText').textContent =
-        countdown > 0 ? `dados de ${ago}s atrás` : 'atualizando...';
-    } else {
-      document.getElementById('refreshText').textContent =
-        countdown > 0 ? `atualiza em ${countdown}s` : 'atualizando...';
-    }
-
-    renderCouriers();
-
-    if (countdown <= 0) {
-      countdown = 10;
-      fetchState();
-    }
-  }, 1000);
+  tickInterval = setInterval(renderCouriers, 1000);
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 async function init() {
   await fetchState();
   startTick();
+  connectStream();
   initPush();
+  trackVisit();
 }
 
 init();
