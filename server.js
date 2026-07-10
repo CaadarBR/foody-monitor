@@ -368,7 +368,7 @@ function processTracking(trackingList, ordersByCourierList) {
         cs.finishedAt  = null;
         cs.alerted    = false;
         if (activeOrders.length === 1) {
-          addAlert('single', `${cs.name} saiu para entrega com apenas 1 pedido!`, cs.name);
+          addAlert('single', `${cs.name} está com apenas 1 pedido para entrega`, cs.name);
         }
       }
     } else {
