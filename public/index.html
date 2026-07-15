@@ -7,6 +7,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="theme-color" content="#0f172a">
   <title>Foody Monitor</title>
+  <link rel="icon" href="https://links.varandaspizzaria.com/favicon.ico">
   <link rel="manifest" href="/manifest.json">
   <style>
     :root {
@@ -373,6 +374,11 @@
     <button class="btn-sm btn-outline" onclick="openSettings()">Atualizar</button>
   </div>
 
+  <!-- Shift idle banner -->
+  <div class="banner banner-blue" id="idleBanner" style="display:none;">
+    <span>🌙 Expediente encerrado — sem pedidos pendentes</span>
+  </div>
+
   <!-- Couriers -->
   <div style="display:flex;align-items:center;justify-content:space-between;margin:16px 0 8px;">
     <div class="section-title" style="margin:0;">🏍️ Entregadores</div>
@@ -517,6 +523,7 @@ function applyState(state) {
   lastServerUpdate  = state.lastUpdated;
   alertMinutes      = state.alertMinutes;
   readyOrdersCount  = state.readyOrdersCount;
+  document.getElementById('idleBanner').style.display = state.shiftIdle ? 'flex' : 'none';
 
   if (state.serverStartedAt) {
     const upMin = Math.floor((Date.now() - state.serverStartedAt) / 60000);
@@ -533,6 +540,7 @@ function applyState(state) {
           alert.type === 'missing' ? '🚨 Sumiu do mapa!'
             : alert.type === 'single' ? '✅ Saiu com 1 entrega'
             : alert.type === 'cookie' ? '🍪 Cookie expirado!'
+            : alert.type === 'shiftEnd' ? '🌙 Expediente encerrado'
             : '⚠️ Demora no retorno',
           alert.msg
         );
@@ -894,8 +902,8 @@ async function dismissAlert(id) {
 }
 
 function alertCardHtml(a) {
-  const cls  = a.type === 'missing' || a.type === 'cookie' ? 'danger' : a.type === 'single' ? 'good' : 'warn';
-  const icon = a.type === 'missing' ? '🚨' : a.type === 'cookie' ? '🍪' : a.type === 'single' ? '✅' : '⚠️';
+  const cls  = a.type === 'missing' || a.type === 'cookie' ? 'danger' : a.type === 'single' || a.type === 'shiftEnd' ? 'good' : 'warn';
+  const icon = a.type === 'missing' ? '🚨' : a.type === 'cookie' ? '🍪' : a.type === 'single' ? '✅' : a.type === 'shiftEnd' ? '🌙' : '⚠️';
   return `
     <div class="alert-card ${cls}">
       <span class="alert-icon">${icon}</span>

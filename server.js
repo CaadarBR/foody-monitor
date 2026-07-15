@@ -172,6 +172,14 @@ function operationalDate() {
   return now.toISOString().slice(0, 10);
 }
 
+// Madrugada = entre 00:00 e 05:00 BRT (03:00–08:00 UTC), quando a loja já fechou
+// mas o turno operacional ainda não virou. É a janela em que faz sentido detectar
+// "acabaram as entregas" — durante o dia um lull momentâneo não deve contar.
+function isLateNightBRT() {
+  const h = new Date().getUTCHours();
+  return h >= 3 && h < 8;
+}
+
 function appendLog(entry) {
   const date = operationalDate();
   const file = path.join(LOGS_DIR, `${date}.json`);
@@ -221,6 +229,7 @@ let sessionOk        = false;
 let pollRunning      = false;
 let hasLoggedStart   = false;
 let currentOpDate    = operationalDate();
+let shiftIdle         = false; // true quando, de madrugada, não há mais pedido pronto nem entrega em rota
 
 let lastCookieAlertAt = 0;
 
@@ -284,6 +293,7 @@ function addAlert(type, msg, courierName = null) {
     title: type === 'missing' ? '🚨 Sumiu do mapa!'
       : type === 'single'    ? '✅ Saiu com 1 entrega'
       : type === 'cookie'    ? '🍪 Cookie expirado!'
+      : type === 'shiftEnd'  ? '🌙 Expediente encerrado'
       : '⚠️ Demora no retorno',
     body: msg,
     tag: `${type}-${courierName || Date.now()}`,
@@ -437,6 +447,7 @@ async function doPoll() {
       for (const [name, time] of activeTimes) courierOnlineSince.set(name, time);
       activeAlerts  = [];
       hasLoggedStart = false;
+      shiftIdle      = false;
       console.log('[INFO] Novo turno — estado resetado.');
     }
 
@@ -457,6 +468,14 @@ async function doPoll() {
       .filter(o => o.status === 'ready').length;
 
     processTracking(tracking.couriers, orders.ordersByCourier || []);
+
+    const noActiveOrders = ![...courierMap.values()].some(c => c.activeOrderCount > 0);
+    const idleNow = isLateNightBRT() && readyOrdersCount === 0 && noActiveOrders;
+    if (idleNow && !shiftIdle) {
+      addAlert('shiftEnd', 'Expediente encerrado — sem pedidos pendentes.');
+    }
+    shiftIdle = idleNow;
+
     lastUpdated = Date.now();
     sessionOk   = true;
     saveState();
@@ -495,6 +514,7 @@ function buildStatePayload() {
     sessionOk,
     lastUpdated,
     readyOrdersCount,
+    shiftIdle,
     alertMinutes:     config.alertMinutes,
     couriers:         [...courierMap.values()],
     alerts:           activeAlerts,
