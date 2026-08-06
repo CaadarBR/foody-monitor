@@ -33,6 +33,25 @@ app.use((req, res, next) => {
   next();
 });
 
+// ── Login do painel (substitui o popup feio de Basic Auth do proxy) ──────────
+// Mesma senha do ADM MASTER: quem loga no painel já entra liberado nas Configurações também.
+function getCookie(req, name) {
+  const header = req.headers.cookie || '';
+  const match = header.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+function isSiteAuthed(req) {
+  if (!config.adminPassword) return false;
+  return getCookie(req, 'foody_session') === config.adminPassword || isAdmin(req);
+}
+
+app.use('/api', (req, res, next) => {
+  if (['/admin/verify', '/track', '/logout'].includes(req.path)) return next();
+  if (!isSiteAuthed(req)) return res.status(401).json({ error: 'unauthorized' });
+  next();
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 const LOGS_DIR = path.join(__dirname, 'logs');
@@ -585,6 +604,8 @@ app.post('/config', (req, res) => {
 
 // ── ADM MASTER (John) ─────────────────────────────────────────────────────────
 
+const SESSION_COOKIE_OPTS = { httpOnly: true, sameSite: 'lax', maxAge: 365 * 24 * 60 * 60 * 1000 };
+
 app.post('/api/admin/verify', (req, res) => {
   const { password } = req.body || {};
   if (!password) return res.status(400).json({ ok: false });
@@ -592,9 +613,17 @@ app.post('/api/admin/verify', (req, res) => {
     // Primeira senha cadastrada vira a senha do ADM MASTER
     config.adminPassword = password;
     saveConfig();
+    res.cookie('foody_session', password, SESSION_COOKIE_OPTS);
     return res.json({ ok: true, created: true });
   }
-  res.json({ ok: config.adminPassword === password });
+  const ok = config.adminPassword === password;
+  if (ok) res.cookie('foody_session', password, SESSION_COOKIE_OPTS);
+  res.json({ ok });
+});
+
+app.post('/api/logout', (req, res) => {
+  res.clearCookie('foody_session');
+  res.json({ ok: true });
 });
 
 app.get('/api/admin/visits', (req, res) => {

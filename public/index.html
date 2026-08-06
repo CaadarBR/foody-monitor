@@ -227,6 +227,34 @@
     .empty-state .icon { font-size: 44px; margin-bottom: 12px; }
     .empty-state p { font-size: 14px; }
 
+    /* ── Login ── */
+    .login-screen {
+      position: fixed; inset: 0;
+      background: var(--bg);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 500;
+      padding: 20px;
+    }
+    .login-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 32px 28px;
+      width: 100%;
+      max-width: 380px;
+      text-align: center;
+    }
+    .login-logo { font-size: 24px; font-weight: 700; color: var(--brand); margin-bottom: 4px; }
+    .login-sub  { font-size: 13px; color: var(--muted); margin-bottom: 26px; }
+    .login-error {
+      color: var(--red);
+      font-size: 12px;
+      margin-top: 12px;
+      display: none;
+    }
+
     /* ── Modal ── */
     .modal-overlay {
       display: none;
@@ -261,7 +289,7 @@
       margin-bottom: 6px;
     }
 
-    textarea, input[type="number"] {
+    textarea, input[type="number"], input[type="password"] {
       width: 100%;
       background: var(--bg);
       border: 1px solid var(--border);
@@ -344,6 +372,22 @@
 </head>
 <body>
 
+<!-- ── Login ── -->
+<div class="login-screen" id="loginScreen">
+  <div class="login-card">
+    <div class="login-logo">🍕 Foody Monitor</div>
+    <div class="login-sub">Varandas Pizzaria</div>
+    <div class="form-group" style="text-align:left;">
+      <label class="form-label">Senha de acesso</label>
+      <input type="password" id="loginPassInput" placeholder="Digite a senha..." autocomplete="current-password" onkeydown="if(event.key==='Enter')submitLogin()">
+    </div>
+    <button class="btn btn-primary" style="width:100%;" onclick="submitLogin()">Entrar</button>
+    <div class="login-error" id="loginError">Senha incorreta.</div>
+  </div>
+</div>
+
+<div id="appContent" style="display:none;">
+
 <!-- ── Header ── -->
 <header class="header">
   <div style="display:flex;align-items:center;gap:8px;">
@@ -356,6 +400,7 @@
     <button class="btn-icon" onclick="forceRefresh()" title="Atualizar agora">🔄</button>
     <button class="btn-icon" onclick="openLog()" title="Histórico do turno">📋</button>
     <button class="btn-icon" onclick="openSettings()" title="Configurações">⚙️</button>
+    <button class="btn-icon" onclick="logout()" title="Sair">🚪</button>
   </div>
 </header>
 
@@ -406,6 +451,8 @@
   </div>
 
 </main>
+
+</div><!-- /appContent -->
 
 <!-- ── Log Modal ── -->
 <div class="modal-overlay" id="logModal">
@@ -753,6 +800,46 @@ async function loadAdminExtras() {
   }).join('') : '<div>Nenhum acesso registrado ainda.</div>';
 }
 
+// ─── Login do painel ──────────────────────────────────────────────────────────
+function showLogin() {
+  document.getElementById('loginScreen').style.display = 'flex';
+  document.getElementById('appContent').style.display  = 'none';
+  document.getElementById('loginError').style.display   = 'none';
+  setTimeout(() => document.getElementById('loginPassInput')?.focus(), 50);
+}
+
+async function enterApp() {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('appContent').style.display  = '';
+  await fetchState();
+  startTick();
+  connectStream();
+  initPush();
+}
+
+async function submitLogin() {
+  const input = document.getElementById('loginPassInput');
+  const pass  = input.value;
+  if (!pass) return;
+  const ok = await verifyAdmin(pass);
+  if (!ok) {
+    document.getElementById('loginError').style.display = 'block';
+    return;
+  }
+  input.value = '';
+  await enterApp();
+}
+
+async function logout() {
+  await fetch('/api/logout', { method: 'POST' }).catch(() => {});
+  localStorage.removeItem('admMasterPass');
+  adminPass       = '';
+  isAdminUnlocked = false;
+  if (eventSource) { eventSource.close(); eventSource = null; }
+  clearInterval(tickInterval);
+  showLogin();
+}
+
 async function openSettings() {
   document.getElementById('settingsModal').classList.add('open');
   if (!isAdminUnlocked && adminPass) {
@@ -1063,11 +1150,12 @@ function startTick() {
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 async function init() {
-  await fetchState();
-  startTick();
-  connectStream();
-  initPush();
   trackVisit();
+  if (adminPass && await verifyAdmin(adminPass)) {
+    await enterApp();
+  } else {
+    showLogin();
+  }
 }
 
 init();
