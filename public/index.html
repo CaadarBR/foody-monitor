@@ -217,6 +217,26 @@
       color: var(--muted);
     }
 
+    /* ── Login discreto (canto) ── */
+    .corner-login-btn {
+      position: fixed;
+      bottom: 16px;
+      right: 16px;
+      width: 34px; height: 34px;
+      border-radius: 50%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 15px;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      z-index: 90;
+      opacity: 0.55;
+      transition: opacity .15s;
+    }
+    .corner-login-btn:hover { opacity: 1; }
+    .corner-login-btn.unlocked { color: var(--green); border-color: var(--green); opacity: 0.85; }
+
     /* ── Empty state ── */
     .empty-state {
       text-align: center;
@@ -359,6 +379,23 @@
   </div>
 </header>
 
+<!-- ── Login discreto do ADM MASTER ── -->
+<button class="corner-login-btn" id="cornerLoginBtn" onclick="openLoginPopup()" title="Login ADM MASTER">🔒</button>
+
+<div class="modal-overlay" id="loginModal">
+  <div class="modal" style="max-width:320px;">
+    <div class="modal-title">🔒 Login ADM MASTER</div>
+    <div class="form-group">
+      <label class="form-label">Senha</label>
+      <input type="password" id="cornerLoginInput" placeholder="Senha do ADM MASTER..." onkeydown="if(event.key==='Enter') submitCornerLogin()">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeLoginPopup()">Cancelar</button>
+      <button class="btn btn-primary" onclick="submitCornerLogin()">Entrar</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Main ── -->
 <main class="main">
 
@@ -466,11 +503,11 @@
 
       <div class="form-group">
         <label class="form-label">🔒 Acesso ao painel</label>
-        <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:400;margin-bottom:8px;">
-          <input type="checkbox" id="desktopOnlyInput" style="width:auto;">
-          Permitir só por computador (bloqueia celular, exceto IPs liberados)
-        </label>
-        <textarea id="allowedIpsInput" placeholder="IPs liberados p/ acessar mesmo por celular, um por linha..." style="min-height:60px;"></textarea>
+        <div class="help-box" style="margin-bottom:8px;">
+          Por padrão o site abre sem mostrar nenhum dado. Só aparece pra quem estiver
+          num IP liberado abaixo, ou pra quem logar como ADM MASTER (botão 🔒 no canto da tela).
+        </div>
+        <textarea id="allowedIpsInput" placeholder="IPs liberados a ver os dados sem precisar logar, um por linha..." style="min-height:60px;"></textarea>
       </div>
 
       <div class="form-group">
@@ -504,7 +541,28 @@ let firstLoad        = true;
 let tickInterval     = null;
 
 // ─── Busca estado do servidor ─────────────────────────────────────────────────
+function showRestricted() {
+  setStatus('');
+  document.getElementById('sessionBanner').style.display       = 'none';
+  document.getElementById('idleBanner').style.display           = 'none';
+  document.getElementById('notifBanner').style.display          = 'none';
+  document.getElementById('alertsSection').style.display        = 'none';
+  document.getElementById('alertsHistorySection').style.display = 'none';
+  document.getElementById('readyBadge').style.display            = 'none';
+  document.getElementById('couriersGrid').innerHTML = `
+    <div class="empty-state">
+      <div class="icon">🔒</div>
+      <p>Sem acesso — peça pra liberar seu IP ou faça login como ADM MASTER</p>
+    </div>`;
+  document.getElementById('refreshText').textContent = '–';
+}
+
 function applyState(state) {
+  if (state.restricted) {
+    showRestricted();
+    return;
+  }
+
   if (!state.configured) {
     setStatus('error');
     openSettings();
@@ -561,7 +619,8 @@ function applyState(state) {
 
 async function fetchState() {
   try {
-    const state = await fetch('/api/state').then(r => r.json());
+    const headers = adminPass ? { 'x-admin-password': adminPass } : {};
+    const state = await fetch('/api/state', { headers }).then(r => r.json());
     applyState(state);
   } catch (e) {
     setStatus('error');
@@ -573,7 +632,8 @@ let eventSource = null;
 
 function connectStream() {
   if (eventSource) eventSource.close();
-  eventSource = new EventSource('/api/stream');
+  const url = adminPass ? `/api/stream?adminPassword=${encodeURIComponent(adminPass)}` : '/api/stream';
+  eventSource = new EventSource(url);
   eventSource.onmessage = e => {
     try { applyState(JSON.parse(e.data)); } catch (err) {}
   };
@@ -718,9 +778,42 @@ async function submitAdminPassword() {
   if (ok) {
     document.getElementById('adminPassInput').value = '';
     await renderSettingsGate();
+    updateCornerLoginBtn();
+    connectStream();
+    await fetchState();
   } else {
     alert('Senha incorreta.');
   }
+}
+
+// ─── Login discreto (canto da tela) ───────────────────────────────────────────
+function openLoginPopup() {
+  if (isAdminUnlocked) return; // já logado, nada a fazer
+  document.getElementById('loginModal').classList.add('open');
+}
+
+function closeLoginPopup() {
+  document.getElementById('loginModal').classList.remove('open');
+  document.getElementById('cornerLoginInput').value = '';
+}
+
+async function submitCornerLogin() {
+  const pass = document.getElementById('cornerLoginInput').value;
+  const ok   = await verifyAdmin(pass);
+  if (ok) {
+    closeLoginPopup();
+    updateCornerLoginBtn();
+    connectStream();
+    await fetchState();
+  } else {
+    alert('Senha incorreta.');
+  }
+}
+
+function updateCornerLoginBtn() {
+  const btn = document.getElementById('cornerLoginBtn');
+  btn.classList.toggle('unlocked', isAdminUnlocked);
+  btn.title = isAdminUnlocked ? 'Logado como ADM MASTER' : 'Login ADM MASTER';
 }
 
 async function renderSettingsGate() {
@@ -737,9 +830,8 @@ async function loadAdminExtras() {
 
   const access = await fetch('/api/admin/access', { headers }).then(r => r.json()).catch(() => null);
   if (access) {
-    document.getElementById('desktopOnlyInput').checked = access.desktopOnly;
-    document.getElementById('allowedIpsInput').value    = (access.allowedIps || []).join('\n');
-    document.getElementById('pollIntervalInput').value  = access.pollIntervalMs || 10000;
+    document.getElementById('allowedIpsInput').value   = (access.allowedIps || []).join('\n');
+    document.getElementById('pollIntervalInput').value = access.pollIntervalMs || 10000;
   }
 
   const data = await fetch('/api/admin/visits', { headers }).then(r => r.json()).catch(() => null);
@@ -768,7 +860,6 @@ function closeSettings() {
 async function saveSettings() {
   const cookie         = document.getElementById('cookieInput').value.trim();
   const mins           = parseInt(document.getElementById('alertMinutes').value) || 15;
-  const desktopOnly    = document.getElementById('desktopOnlyInput').checked;
   const allowedIps     = document.getElementById('allowedIpsInput').value
     .split('\n').map(s => s.trim()).filter(Boolean);
   const pollIntervalMs = Math.max(200, parseInt(document.getElementById('pollIntervalInput').value) || 10000);
@@ -788,7 +879,7 @@ async function saveSettings() {
 
   await Promise.all([
     fetch('/config', { method: 'POST', headers, body: JSON.stringify(body) }),
-    fetch('/api/admin/access', { method: 'POST', headers, body: JSON.stringify({ desktopOnly, allowedIps, pollIntervalMs }) }),
+    fetch('/api/admin/access', { method: 'POST', headers, body: JSON.stringify({ allowedIps, pollIntervalMs }) }),
   ]);
 
   alertMinutes = mins;
@@ -1063,6 +1154,8 @@ function startTick() {
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 async function init() {
+  if (adminPass) await verifyAdmin(adminPass).catch(() => {});
+  updateCornerLoginBtn();
   await fetchState();
   startTick();
   connectStream();

@@ -14,25 +14,6 @@ const app = express();
 app.set('trust proxy', true);
 app.use(express.json());
 
-// ── Trava de acesso por dispositivo + IP liberado ─────────────────────────────
-// Por padrão só libera computador. Celulares só passam se o IP estiver em config.allowedIps.
-app.use((req, res, next) => {
-  if (config.desktopOnly === false) return next();
-  const ip = (req.ip || '').replace('::ffff:', '');
-  if ((config.allowedIps || []).includes(ip)) return next();
-  const ua = req.headers['user-agent'] || '';
-  if (/mobi|android|iphone|ipad|ipod/i.test(ua)) {
-    return res.status(403).send(
-      '<!doctype html><html><head><meta charset="utf-8"><title>Acesso restrito</title></head>' +
-      '<body style="font-family:sans-serif;background:#0f172a;color:#f1f5f9;display:flex;' +
-      'align-items:center;justify-content:center;height:100vh;margin:0;text-align:center;padding:20px;">' +
-      '<div><h2>🔒 Acesso restrito</h2><p>Este painel só pode ser aberto por computador.</p></div>' +
-      '</body></html>'
-    );
-  }
-  next();
-});
-
 app.use(express.static(path.join(__dirname, 'public')));
 
 const LOGS_DIR = path.join(__dirname, 'logs');
@@ -45,9 +26,8 @@ const CONFIG_FILE = path.join(LOGS_DIR, 'config.json');
 
 let config = {
   cookie: '', alertMinutes: 15,
-  adminPassword: '',   // senha do ADM MASTER (John) — protege Configurações/Acesso
-  desktopOnly: true,   // trava de acesso: só computador, exceto IPs em allowedIps
-  allowedIps: [],       // IPs liberados a acessar mesmo por celular
+  adminPassword: '',   // senha do ADM MASTER (John) — protege Configurações e libera os dados
+  allowedIps: [],       // IPs liberados a ver os dados sem precisar logar como ADM
   pollIntervalMs: 10000, // de quanto em quanto tempo consulta o Foody
 };
 
@@ -62,7 +42,6 @@ function loadConfig() {
       if (saved.alertMinutes) config.alertMinutes = saved.alertMinutes;
       if (saved.vapidKeys) config.vapidKeys = saved.vapidKeys;
       if (saved.adminPassword) config.adminPassword = saved.adminPassword;
-      if (typeof saved.desktopOnly === 'boolean') config.desktopOnly = saved.desktopOnly;
       if (Array.isArray(saved.allowedIps)) config.allowedIps = saved.allowedIps;
       if (saved.pollIntervalMs) config.pollIntervalMs = saved.pollIntervalMs;
     } catch (e) {}
@@ -522,17 +501,20 @@ function buildStatePayload() {
   };
 }
 
+const RESTRICTED_PAYLOAD = { restricted: true };
+
 app.get('/api/state', (req, res) => {
-  res.json(buildStatePayload());
+  res.json(hasDataAccess(req) ? buildStatePayload() : RESTRICTED_PAYLOAD);
 });
 
 // ── Tempo real (Server-Sent Events) ──────────────────────────────────────────
 
-const sseClients = new Set();
+const sseClients = new Set(); // { res, access }
 
 function broadcastState() {
-  const data = `data: ${JSON.stringify(buildStatePayload())}\n\n`;
-  for (const res of sseClients) res.write(data);
+  const full       = `data: ${JSON.stringify(buildStatePayload())}\n\n`;
+  const restricted = `data: ${JSON.stringify(RESTRICTED_PAYLOAD)}\n\n`;
+  for (const client of sseClients) client.res.write(client.access ? full : restricted);
 }
 
 app.get('/api/stream', (req, res) => {
@@ -542,14 +524,16 @@ app.get('/api/stream', (req, res) => {
     'Connection':    'keep-alive',
   });
   res.flushHeaders();
-  res.write(`data: ${JSON.stringify(buildStatePayload())}\n\n`);
-  sseClients.add(res);
-  req.on('close', () => sseClients.delete(res));
+  const access = hasDataAccess(req);
+  const client = { res, access };
+  res.write(`data: ${JSON.stringify(access ? buildStatePayload() : RESTRICTED_PAYLOAD)}\n\n`);
+  sseClients.add(client);
+  req.on('close', () => sseClients.delete(client));
 });
 
 // Mantém as conexões SSE vivas atrás do proxy do EasyPanel
 setInterval(() => {
-  for (const res of sseClients) res.write(':keep-alive\n\n');
+  for (const client of sseClients) client.res.write(':keep-alive\n\n');
 }, 20 * 1000);
 
 app.post('/api/alerts/dismiss', (req, res) => {
@@ -563,7 +547,19 @@ app.get('/config', (req, res) => {
 });
 
 function isAdmin(req) {
-  return !!config.adminPassword && req.headers['x-admin-password'] === config.adminPassword;
+  const pass = req.headers['x-admin-password'] || req.query.adminPassword;
+  return !!config.adminPassword && pass === config.adminPassword;
+}
+
+function ipAllowed(req) {
+  const ip = (req.ip || '').replace('::ffff:', '');
+  return (config.allowedIps || []).includes(ip);
+}
+
+// Libera os dados do painel só pra IP liberado ou ADM MASTER logado.
+// Todo mundo abre o site — o que muda é se os dados aparecem ou não.
+function hasDataAccess(req) {
+  return ipAllowed(req) || isAdmin(req);
 }
 
 app.post('/config', (req, res) => {
@@ -605,7 +601,6 @@ app.get('/api/admin/visits', (req, res) => {
 app.get('/api/admin/access', (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'unauthorized' });
   res.json({
-    desktopOnly:    config.desktopOnly !== false,
     allowedIps:     config.allowedIps || [],
     pollIntervalMs: config.pollIntervalMs || 10000,
   });
@@ -613,7 +608,6 @@ app.get('/api/admin/access', (req, res) => {
 
 app.post('/api/admin/access', (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'unauthorized' });
-  if (typeof req.body.desktopOnly === 'boolean') config.desktopOnly = req.body.desktopOnly;
   if (Array.isArray(req.body.allowedIps)) {
     config.allowedIps = req.body.allowedIps.map(s => String(s).trim()).filter(Boolean);
   }
@@ -647,6 +641,7 @@ app.post('/api/track', (req, res) => {
 });
 
 app.get('/api/log', (req, res) => {
+  if (!hasDataAccess(req)) return res.status(401).json({ date: null, logs: [] });
   const date = req.query.date || operationalDate();
   const file = path.join(LOGS_DIR, `${date}.json`);
   try {
@@ -657,6 +652,7 @@ app.get('/api/log', (req, res) => {
 });
 
 app.get('/api/logs', (req, res) => {
+  if (!hasDataAccess(req)) return res.status(401).json({ dates: [] });
   try {
     const dates = fs.readdirSync(LOGS_DIR)
       .filter(f => f.endsWith('.json'))
