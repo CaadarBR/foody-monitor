@@ -14,23 +14,76 @@ const app = express();
 app.set('trust proxy', true);
 app.use(express.json());
 
-// ── Trava de acesso por dispositivo + IP liberado ─────────────────────────────
-// Por padrão só libera computador. Celulares só passam se o IP estiver em config.allowedIps.
-app.use((req, res, next) => {
-  if (config.desktopOnly === false) return next();
-  const ip = (req.ip || '').replace('::ffff:', '');
-  if ((config.allowedIps || []).includes(ip)) return next();
-  const ua = req.headers['user-agent'] || '';
-  if (/mobi|android|iphone|ipad|ipod/i.test(ua)) {
-    return res.status(403).send(
-      '<!doctype html><html><head><meta charset="utf-8"><title>Acesso restrito</title></head>' +
-      '<body style="font-family:sans-serif;background:#0f172a;color:#f1f5f9;display:flex;' +
-      'align-items:center;justify-content:center;height:100vh;margin:0;text-align:center;padding:20px;">' +
-      '<div><h2>🔒 Acesso restrito</h2><p>Este painel só pode ser aberto por computador.</p></div>' +
-      '</body></html>'
-    );
+// ── Trava de acesso: só entra quem tiver IP liberado ou souber a senha do ADM MASTER ──
+// IP em config.allowedIps entra direto, sem senha nenhuma. Sem IP liberado, só a senha
+// do ADM MASTER libera (fica guardada num cookie). Sem IP e sem senha, cai numa página
+// qualquer sem nenhuma informação do sistema.
+
+const GATE_COOKIE = 'fm_gate';
+
+function clientIp(req) {
+  return (req.ip || '').replace('::ffff:', '');
+}
+
+function getCookie(req, name) {
+  const raw = req.headers.cookie || '';
+  for (const part of raw.split(';')) {
+    const i = part.indexOf('=');
+    if (i === -1) continue;
+    if (part.slice(0, i).trim() === name) return decodeURIComponent(part.slice(i + 1).trim());
   }
-  next();
+  return null;
+}
+
+const GATE_PAGE = `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Site</title></head>
+<body style="margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+background:#f5f5f5;font-family:sans-serif;color:#bbb;">
+<div style="text-align:center;">
+  <div style="font-size:13px;margin-bottom:10px;">Nada por aqui.</div>
+  <input id="k" type="password" placeholder="•••" autocomplete="off"
+    style="width:70px;font-size:11px;padding:3px 6px;border:1px solid #ddd;border-radius:4px;
+    opacity:.35;text-align:center;">
+</div>
+<script>
+document.getElementById('k').addEventListener('keydown', async (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  const password = e.target.value;
+  try {
+    const r = await fetch('/api/gate/unlock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password }),
+    }).then(r => r.json());
+    if (r.ok) return location.reload();
+  } catch (err) {}
+  e.target.value = '';
+});
+</script>
+</body></html>`;
+
+app.use((req, res, next) => {
+  if (req.path === '/api/gate/unlock') return next();
+  if ((config.allowedIps || []).includes(clientIp(req))) return next();
+  if (config.adminPassword && getCookie(req, GATE_COOKIE) === config.adminPassword) return next();
+  res.status(200).send(GATE_PAGE);
+});
+
+app.post('/api/gate/unlock', (req, res) => {
+  const { password } = req.body || {};
+  if (!password) return res.json({ ok: false });
+  if (!config.adminPassword) {
+    // Primeira senha cadastrada vira a senha do ADM MASTER
+    config.adminPassword = password;
+    saveConfig();
+  } else if (config.adminPassword !== password) {
+    return res.json({ ok: false });
+  }
+  res.setHeader('Set-Cookie',
+    `${GATE_COOKIE}=${encodeURIComponent(password)}; HttpOnly; Path=/; Max-Age=${60 * 60 * 24 * 365}; SameSite=Lax`);
+  res.json({ ok: true });
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -46,8 +99,7 @@ const CONFIG_FILE = path.join(LOGS_DIR, 'config.json');
 let config = {
   cookie: '', alertMinutes: 15,
   adminPassword: '',   // senha do ADM MASTER (John) — protege Configurações/Acesso
-  desktopOnly: true,   // trava de acesso: só computador, exceto IPs em allowedIps
-  allowedIps: [],       // IPs liberados a acessar mesmo por celular
+  allowedIps: [],       // IPs liberados a acessar sem precisar da senha
   pollIntervalMs: 10000, // de quanto em quanto tempo consulta o Foody
 };
 
@@ -62,7 +114,6 @@ function loadConfig() {
       if (saved.alertMinutes) config.alertMinutes = saved.alertMinutes;
       if (saved.vapidKeys) config.vapidKeys = saved.vapidKeys;
       if (saved.adminPassword) config.adminPassword = saved.adminPassword;
-      if (typeof saved.desktopOnly === 'boolean') config.desktopOnly = saved.desktopOnly;
       if (Array.isArray(saved.allowedIps)) config.allowedIps = saved.allowedIps;
       if (saved.pollIntervalMs) config.pollIntervalMs = saved.pollIntervalMs;
     } catch (e) {}
@@ -605,7 +656,7 @@ app.get('/api/admin/visits', (req, res) => {
 app.get('/api/admin/access', (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'unauthorized' });
   res.json({
-    desktopOnly:    config.desktopOnly !== false,
+    myIp:           clientIp(req),
     allowedIps:     config.allowedIps || [],
     pollIntervalMs: config.pollIntervalMs || 10000,
   });
@@ -613,7 +664,6 @@ app.get('/api/admin/access', (req, res) => {
 
 app.post('/api/admin/access', (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'unauthorized' });
-  if (typeof req.body.desktopOnly === 'boolean') config.desktopOnly = req.body.desktopOnly;
   if (Array.isArray(req.body.allowedIps)) {
     config.allowedIps = req.body.allowedIps.map(s => String(s).trim()).filter(Boolean);
   }
@@ -629,7 +679,7 @@ app.post('/api/track', (req, res) => {
   const parsed = parseUserAgent(ua);
   const extra  = req.body || {};
   visits.unshift({
-    ip:         (req.ip || '').replace('::ffff:', ''),
+    ip:         clientIp(req),
     time:       new Date().toISOString(),
     os:         parsed.os,
     browser:    parsed.browser,

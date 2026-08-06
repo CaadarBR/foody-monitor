@@ -466,11 +466,12 @@
 
       <div class="form-group">
         <label class="form-label">🔒 Acesso ao painel</label>
-        <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:400;margin-bottom:8px;">
-          <input type="checkbox" id="desktopOnlyInput" style="width:auto;">
-          Permitir só por computador (bloqueia celular, exceto IPs liberados)
-        </label>
-        <textarea id="allowedIpsInput" placeholder="IPs liberados p/ acessar mesmo por celular, um por linha..." style="min-height:60px;"></textarea>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:6px;">
+          Só entra quem estiver num IP liberado abaixo, ou quem souber a senha do ADM MASTER.
+          Seu IP atual é <b id="myIpLabel">…</b>
+          <button type="button" class="btn-sm btn-outline" style="font-size:11px;padding:2px 8px;margin-left:4px;" onclick="addMyIp()">+ liberar este IP</button>
+        </div>
+        <textarea id="allowedIpsInput" placeholder="IPs liberados, um por linha..." style="min-height:60px;"></textarea>
       </div>
 
       <div class="form-group">
@@ -737,7 +738,7 @@ async function loadAdminExtras() {
 
   const access = await fetch('/api/admin/access', { headers }).then(r => r.json()).catch(() => null);
   if (access) {
-    document.getElementById('desktopOnlyInput').checked = access.desktopOnly;
+    document.getElementById('myIpLabel').textContent    = access.myIp || '?';
     document.getElementById('allowedIpsInput').value    = (access.allowedIps || []).join('\n');
     document.getElementById('pollIntervalInput').value  = access.pollIntervalMs || 10000;
   }
@@ -765,10 +766,17 @@ function closeSettings() {
   document.getElementById('settingsModal').classList.remove('open');
 }
 
+function addMyIp() {
+  const ip  = document.getElementById('myIpLabel').textContent;
+  const ta  = document.getElementById('allowedIpsInput');
+  const ips = ta.value.split('\n').map(s => s.trim()).filter(Boolean);
+  if (ip && ip !== '?' && !ips.includes(ip)) ips.push(ip);
+  ta.value = ips.join('\n');
+}
+
 async function saveSettings() {
   const cookie         = document.getElementById('cookieInput').value.trim();
   const mins           = parseInt(document.getElementById('alertMinutes').value) || 15;
-  const desktopOnly    = document.getElementById('desktopOnlyInput').checked;
   const allowedIps     = document.getElementById('allowedIpsInput').value
     .split('\n').map(s => s.trim()).filter(Boolean);
   const pollIntervalMs = Math.max(200, parseInt(document.getElementById('pollIntervalInput').value) || 10000);
@@ -788,7 +796,7 @@ async function saveSettings() {
 
   await Promise.all([
     fetch('/config', { method: 'POST', headers, body: JSON.stringify(body) }),
-    fetch('/api/admin/access', { method: 'POST', headers, body: JSON.stringify({ desktopOnly, allowedIps, pollIntervalMs }) }),
+    fetch('/api/admin/access', { method: 'POST', headers, body: JSON.stringify({ allowedIps, pollIntervalMs }) }),
   ]);
 
   alertMinutes = mins;
