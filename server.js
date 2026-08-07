@@ -341,13 +341,7 @@ function processTracking(trackingList, ordersByCourierList) {
     cs.activeOrderCount = activeOrders.length;
     if (lastOrderNumber != null) cs.lastOrderNumber = lastOrderNumber;
 
-    if (cs.status === 'missing') {
-      cs.status     = activeOrders.length > 0 ? 'delivering' : 'available';
-      const onlineAt = cs.onlineAt || courierOnlineSince.get(cs.name) || now;
-      cs.statusSince = finishedAt || onlineAt;
-      cs.finishedAt  = finishedAt;
-      cs.alerted    = false;
-    } else if (activeOrders.length > 0) {
+    if (activeOrders.length > 0) {
       if (cs.status !== 'delivering') {
         cs.status     = 'delivering';
         cs.statusSince = now;
@@ -389,15 +383,13 @@ function processTracking(trackingList, ordersByCourierList) {
     }
   }
 
-  // Detecta quem sumiu do mapa
+  // Detecta quem sumiu do mapa — avisa uma vez e tira o card da tela
+  // (se ele reconectar depois, volta como um novo card, sem ficar preso mostrando timer).
   for (const [id, cs] of courierMap) {
-    if (!seenIds.has(id) && cs.status !== 'missing') {
-      const prev = cs.status;
-      cs.status     = 'missing';
-      cs.statusSince = now;
-      cs.alerted    = true;
-      appendLog({ type: 'status_change', courierName: cs.name, from: prev, to: 'missing' });
+    if (!seenIds.has(id)) {
+      appendLog({ type: 'status_change', courierName: cs.name, from: cs.status, to: 'missing' });
       addAlert('missing', `${cs.name} sumiu do mapa!`, cs.name);
+      courierMap.delete(id);
     }
   }
 }
