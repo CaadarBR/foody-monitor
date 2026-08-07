@@ -230,10 +230,7 @@ function loadState() {
   try {
     const raw = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
     if (raw.opDate !== operationalDate()) {
-      // Turno diferente — descarta estado mas extrai onlineAt para não zerar timers
-      for (const [, cs] of (raw.couriers || [])) {
-        if (cs && cs.name && cs.onlineAt) courierOnlineSince.set(cs.name, cs.onlineAt);
-      }
+      // Turno diferente — zera geral, não carrega nada do dia anterior.
       return;
     }
     for (const [id, cs] of raw.couriers) courierMap.set(id, cs);
@@ -415,15 +412,9 @@ async function doPoll() {
     const today = operationalDate();
     if (today !== currentOpDate) {
       currentOpDate = today;
-      // Preserva onlineAt dos entregadores ainda ativos ao virar o turno,
-      // para não zerar o timer de quem trabalha além da fronteira operacional.
-      const activeTimes = new Map();
-      for (const [, cs] of courierMap) {
-        if (cs.onlineAt) activeTimes.set(cs.name, cs.onlineAt);
-      }
+      // Zera geral na virada do turno — sem carregar timer de ninguém pro dia seguinte.
       courierMap.clear();
       courierOnlineSince.clear();
-      for (const [name, time] of activeTimes) courierOnlineSince.set(name, time);
       activeAlerts  = [];
       hasLoggedStart = false;
       shiftIdle      = false;
