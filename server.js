@@ -151,6 +151,15 @@ function operationalDate() {
   return now.toISOString().slice(0, 10);
 }
 
+// Timestamp (ms) de quando o turno atual começou (05:00 BRT / 08:00 UTC).
+// Usado pra ignorar entregas de turnos passados ao calcular "desde quando descansando".
+function operationalDayStartMs() {
+  const now = new Date();
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 8, 0, 0, 0));
+  if (now.getUTCHours() < 8) start.setUTCDate(start.getUTCDate() - 1);
+  return start.getTime();
+}
+
 // Madrugada = entre 00:00 e 05:00 BRT (03:00–08:00 UTC), quando a loja já fechou
 // mas o turno operacional ainda não virou. É a janela em que faz sentido detectar
 // "acabaram as entregas" — durante o dia um lull momentâneo não deve contar.
@@ -282,8 +291,9 @@ function orderNumberOf(o) {
 }
 
 function processTracking(trackingList, ordersByCourierList) {
-  const now     = Date.now();
-  const seenIds = new Set(trackingList.map(c => c.courierId));
+  const now        = Date.now();
+  const shiftStart = operationalDayStartMs();
+  const seenIds    = new Set(trackingList.map(c => c.courierId));
 
   const ordersByName = new Map();
   for (const co of ordersByCourierList) {
@@ -296,7 +306,11 @@ function processTracking(trackingList, ordersByCourierList) {
     const all  = ordersByName.get(name) || [];
 
     const activeOrders    = all.filter(o => ['onGoing', 'accepted', 'dispatched'].includes(o.status));
-    const deliveredOrders = all.filter(o => o.status === 'delivered' && o.deliveryDate);
+    // Só conta entrega do turno atual — senão um entregador sem entrega hoje ainda
+    // pega uma entrega antiga (de dias atrás) como referência e o timer de "descansando" explode.
+    const deliveredOrders = all.filter(o =>
+      o.status === 'delivered' && o.deliveryDate && new Date(o.deliveryDate).getTime() >= shiftStart
+    );
 
     let finishedAt = null;
     let lastOrderNumber = null;
