@@ -269,6 +269,14 @@ function loadOnlineTimes() {
 
 loadOnlineTimes();
 
+// Formata uma duração em minutos como "2h14min" (ou "45min" quando < 1h).
+function fmtMinutes(totalMinutes) {
+  const mins = Math.max(0, Math.floor(totalMinutes));
+  const h    = Math.floor(mins / 60);
+  const m    = mins % 60;
+  return h > 0 ? `${h}h${String(m).padStart(2, '0')}min` : `${m}min`;
+}
+
 function addAlert(type, msg, courierName = null) {
   activeAlerts.unshift({ id: Date.now(), type, msg, time: new Date().toISOString(), courierName });
   if (activeAlerts.length > 30) activeAlerts.pop();
@@ -378,7 +386,7 @@ function processTracking(trackingList, ordersByCourierList) {
             cs.status = 'alert';
             if (!cs.alerted) {
               cs.alerted = true;
-              addAlert('slow', `${cs.name} terminou há ${Math.floor(elapsed)}min e tem pedido esperando!`, cs.name);
+              addAlert('slow', `${cs.name} terminou há ${fmtMinutes(elapsed)} e tem pedido esperando!`, cs.name);
             }
           } else if (elapsed >= config.alertMinutes * 0.65) {
             if (cs.status !== 'alert') cs.status = 'warning';

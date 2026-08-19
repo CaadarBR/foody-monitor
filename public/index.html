@@ -588,7 +588,7 @@ function applyState(state) {
   if (state.serverStartedAt) {
     const upMin = Math.floor((Date.now() - state.serverStartedAt) / 60000);
     document.getElementById('serverUptime').textContent =
-      upMin < 1 ? '⚠️ servidor reiniciou agora' : `servidor: ${upMin}min no ar`;
+      upMin < 1 ? '⚠️ servidor reiniciou agora' : `servidor: ${fmtMinutes(upMin)} no ar`;
   }
 
   // Detecta alertas novos → toca som (ignora os que já existiam ao abrir)
@@ -1140,7 +1140,15 @@ function pad(n) { return String(n).padStart(2, '0'); }
 function fmtRelative(ts) {
   const diff = Math.floor((Date.now() - ts) / 1000);
   if (diff < 60) return `há ${diff}s`;
-  return `há ${Math.floor(diff / 60)}min`;
+  return `há ${fmtMinutes(diff / 60)}`;
+}
+
+// Formata uma duração em minutos como "2h14min" (ou "45min" quando < 1h).
+function fmtMinutes(totalMinutes) {
+  const mins = Math.max(0, Math.floor(totalMinutes));
+  const h    = Math.floor(mins / 60);
+  const m    = mins % 60;
+  return h > 0 ? `${h}h${pad(m)}min` : `${m}min`;
 }
 
 // ─── Tick ─────────────────────────────────────────────────────────────────────
