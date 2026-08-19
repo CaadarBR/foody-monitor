@@ -269,6 +269,14 @@ function loadOnlineTimes() {
 
 loadOnlineTimes();
 
+// Ponto de partida do "parado desde". Nunca antes da última vez em que ele foi visto
+// com pedido ativo, e nunca no futuro — o deliveryDate do Foody pode vir com fuso
+// trocado ou desatualizado, e sem essas travas o contador acumula horas que o
+// entregador não passou parado.
+function clampIdle(raw, floor, now) {
+  return Math.min(Math.max(raw, floor || 0), now);
+}
+
 // Formata uma duração em minutos como "2h14min" (ou "45min" quando < 1h).
 function fmtMinutes(totalMinutes) {
   const mins = Math.max(0, Math.floor(totalMinutes));
@@ -346,6 +354,7 @@ function processTracking(trackingList, ordersByCourierList) {
         lat: tc.latitute, lng: tc.longitude,
         activeOrderCount: activeOrders.length,
         finishedAt,
+        lastActiveAt: activeOrders.length > 0 ? now : null,
         lastOrderNumber,
         status,
         statusSince: finishedAt || onlineAt,
@@ -364,6 +373,7 @@ function processTracking(trackingList, ordersByCourierList) {
     if (lastOrderNumber != null) cs.lastOrderNumber = lastOrderNumber;
 
     if (activeOrders.length > 0) {
+      cs.lastActiveAt = now; // última vez visto com pedido na mão
       if (cs.status !== 'delivering') {
         cs.status     = 'delivering';
         cs.statusSince = now;
@@ -375,9 +385,23 @@ function processTracking(trackingList, ordersByCourierList) {
       }
     } else {
       if (cs.status === 'delivering') {
-        cs.finishedAt  = finishedAt || now;
-        cs.statusSince = now;
-        cs.alerted    = false;
+        cs.alerted = false;
+        // Terminou agora e o Foody ainda não publicou a entrega: conta a partir de agora.
+        if (!finishedAt && !cs.finishedAt) cs.finishedAt = now;
+      }
+      // Recalcula SEMPRE (e não só ao sair de "em entrega"): se ele rodou mais uma
+      // entrega sem o monitor pegar o estado intermediário, o relógio precisa voltar
+      // pro fim dessa entrega em vez de continuar contando desde a primeira do turno.
+      const ref = finishedAt || cs.finishedAt;
+      if (ref) {
+        const idleAt = clampIdle(ref, cs.lastActiveAt || 0, now);
+        if (cs.finishedAt !== idleAt) {
+          if (finishedAt && idleAt - finishedAt > 5 * 60000) {
+            console.log(`[INFO] ${cs.name}: deliveryDate (${new Date(finishedAt).toISOString()}) é anterior ao último pedido ativo — contando de ${new Date(idleAt).toISOString()}.`);
+          }
+          cs.finishedAt  = idleAt;
+          cs.statusSince = idleAt; // card e notificação contam do mesmo ponto
+        }
       }
       if (cs.finishedAt) {
         const elapsed = (now - cs.finishedAt) / 60000;

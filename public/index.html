@@ -602,7 +602,8 @@ function applyState(state) {
             : alert.type === 'cookie' ? '🍪 Cookie expirado!'
             : alert.type === 'shiftEnd' ? '🌙 Expediente encerrado'
             : '⚠️ Demora no retorno',
-          alert.msg
+          alert.msg,
+          `${alert.type}-${alert.courierName || alert.id}`
         );
       }
     }
@@ -912,6 +913,7 @@ async function trackVisit() {
 
 // ─── Notifications + Push ────────────────────────────────────────────────────
 let swRegistration = null;
+let pushSubscribed = false;
 
 async function initPush() {
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
@@ -928,7 +930,7 @@ async function subscribeToPush() {
   if (!swRegistration) return;
   try {
     const existing = await swRegistration.pushManager.getSubscription();
-    if (existing) return;
+    if (existing) { pushSubscribed = true; return; }
     const { publicKey } = await fetch('/api/push/vapid-key').then(r => r.json());
     const sub = await swRegistration.pushManager.subscribe({
       userVisibleOnly: true,
@@ -939,6 +941,7 @@ async function subscribeToPush() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(sub),
     });
+    pushSubscribed = true;
   } catch (e) {}
 }
 
@@ -975,11 +978,13 @@ function beep(freq = 880, duration = 0.4) {
   } catch (e) {}
 }
 
-function pushNotification(title, body) {
+function pushNotification(title, body, tag) {
   beep();
-  if (Notification.permission === 'granted') {
-    new Notification(title, { body });
-  }
+  if (Notification.permission !== 'granted') return;
+  // Com a aba fora da tela quem avisa é o service worker (web push). Mostrar aqui
+  // também fazia aparecer a MESMA notificação duas vezes na central do Windows.
+  if (document.visibilityState !== 'visible' && pushSubscribed) return;
+  new Notification(title, { body, tag });
 }
 
 // ─── Alerts ──────────────────────────────────────────────────────────────────
