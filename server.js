@@ -31,8 +31,8 @@ let config = {
   pollIntervalMs: 10000, // de quanto em quanto tempo consulta o Foody
 
   // ── Pedido parado na mão do entregador ─────────────────────────────────────
-  noAcceptMinutes:   5,  // caiu pra ele e ele não aceitou
-  noDispatchMinutes: 5,  // aceitou mas continua na loja
+  noCollectMinutes:  5,  // caiu pra ele e ele não coletou
+  noDispatchMinutes: 5,  // coletou mas continua na loja
   promiseMinutes:   50,  // prazo padrão do pedido (provisório, até o CardápioWeb entrar)
   lateMarginMinutes: 10, // faltando isso pro prazo, já conta como "vai atrasar"
 
@@ -40,14 +40,17 @@ let config = {
   // ajustados sem mexer no código. O que não estiver em nenhuma lista aparece
   // no log e no ADM ("status vistos") pra ser encaixado depois.
   orderStatus: {
-    waiting: ['pending', 'waiting', 'assigned', 'new', 'created', 'sent'], // na mão dele, sem aceitar
-    atStore: ['accepted'],                                                 // aceitou, ainda na loja
-    onRoute: ['onGoing', 'dispatched', 'inRoute', 'onTheWay'],             // saiu pra rua
+    // caiu pra ele e ainda não coletou
+    waiting:   ['pending', 'waiting', 'assigned', 'accepted', 'new', 'created', 'sent'],
+    // coletou, mas ainda não saiu da loja
+    collected: ['collected', 'coletado', 'pickedUp', 'picked_up', 'pickup', 'withCourier'],
+    // saiu pra entrega
+    onRoute:   ['onGoing', 'dispatched', 'inRoute', 'onTheWay', 'outForDelivery', 'saiuParaEntrega', 'delivering'],
   },
 
   msgTemplates: {
-    noAccept:   'Opa {nome}! O pedido #{pedido} caiu pra você há {tempo} e ainda não foi aceito. Consegue aceitar agora?',
-    noDispatch: 'Opa {nome}! O pedido #{pedido} já está com você há {tempo} e ainda não saiu pra entrega. Consegue sair agora?',
+    notCollected: 'Opa {nome}! O pedido #{pedido} caiu pra você há {tempo} e ainda não foi coletado. Consegue coletar agora?',
+    noDispatch: 'Opa {nome}! Você coletou o pedido #{pedido} há {tempo} e ainda não saiu pra entrega. Consegue sair agora?',
     late:       '{nome}, o pedido #{pedido} {prazo} e ainda não saiu da loja. Precisa sair agora pra não atrasar!',
   },
 };
@@ -65,11 +68,23 @@ function loadConfig() {
       if (saved.adminPassword) config.adminPassword = saved.adminPassword;
       if (Array.isArray(saved.allowedIps)) config.allowedIps = saved.allowedIps;
       if (saved.pollIntervalMs) config.pollIntervalMs = saved.pollIntervalMs;
-      for (const k of ['noAcceptMinutes', 'noDispatchMinutes', 'promiseMinutes', 'lateMarginMinutes']) {
+      for (const k of ['noCollectMinutes', 'noDispatchMinutes', 'promiseMinutes', 'lateMarginMinutes']) {
         if (saved[k] != null) config[k] = saved[k];
       }
-      if (saved.orderStatus)  config.orderStatus  = { ...config.orderStatus,  ...saved.orderStatus };
-      if (saved.msgTemplates) config.msgTemplates = { ...config.msgTemplates, ...saved.msgTemplates };
+      // nomes da versão anterior, quando a fase do meio era "aceitou" em vez de "coletou"
+      if (saved.noAcceptMinutes != null && saved.noCollectMinutes == null) {
+        config.noCollectMinutes = saved.noAcceptMinutes;
+      }
+      if (saved.orderStatus) {
+        const { atStore, ...resto } = saved.orderStatus;
+        config.orderStatus = { ...config.orderStatus, ...resto };
+        if (atStore && !saved.orderStatus.collected) config.orderStatus.collected = atStore;
+      }
+      if (saved.msgTemplates) {
+        const { noAccept, ...resto } = saved.msgTemplates;
+        config.msgTemplates = { ...config.msgTemplates, ...resto };
+        if (noAccept && !saved.msgTemplates.notCollected) config.msgTemplates.notCollected = noAccept;
+      }
     } catch (e) {}
   }
 }
@@ -316,8 +331,8 @@ function alertTitle(type) {
     : type === 'single'        ? '✅ Saiu com 1 entrega'
     : type === 'cookie'        ? '🍪 Cookie expirado!'
     : type === 'shiftEnd'      ? '🌙 Expediente encerrado'
-    : type === 'noAccept'      ? '⏳ Pedido sem aceitar'
-    : type === 'noDispatch'    ? '🛵 Pedido parado na loja'
+    : type === 'notCollected'  ? '⏳ Pedido sem coletar'
+    : type === 'noDispatch'    ? '🛵 Coletou e não saiu'
     : type === 'late'          ? '⏰ Vai estourar o prazo'
     : '⚠️ Demora no retorno';
 }
@@ -345,8 +360,8 @@ function orderKeyOf(o) {
 
 // ── Pedido parado na mão do entregador ───────────────────────────────────────
 // Todo pedido passa por três fases até ir pra rua: cai pro entregador (waiting),
-// ele aceita mas continua na loja (atStore) e finalmente sai (onRoute). O alerta
-// mora nas duas primeiras — depois que saiu, não tem mais o que cobrar.
+// ele coleta mas continua na loja (collected) e finalmente sai pra entrega
+// (onRoute). O alerta mora nas duas primeiras — depois que saiu, não tem o que cobrar.
 
 const orderTracker      = new Map(); // "courierId:pedido" → fase + desde quando
 const seenOrderStatuses = new Set(); // vocabulário real do Foody, pro ADM conferir
@@ -356,9 +371,9 @@ let   orderFieldsSeen   = [];        // campos que o pedido traz (pra achar o pr
 function orderPhase(status) {
   const s = String(status || '');
   const b = config.orderStatus || {};
-  if ((b.onRoute || []).includes(s)) return 'onRoute';
-  if ((b.atStore || []).includes(s)) return 'atStore';
-  if ((b.waiting || []).includes(s)) return 'waiting';
+  if ((b.onRoute   || []).includes(s)) return 'onRoute';
+  if ((b.collected || []).includes(s)) return 'collected';
+  if ((b.waiting   || []).includes(s)) return 'waiting';
   if (['delivered', 'canceled', 'cancelled', 'concluded', 'finished'].includes(s)) return 'done';
   return 'unknown';
 }
@@ -366,7 +381,7 @@ function orderPhase(status) {
 // Statuses que contam como "pedido na mão dele" pro resto do monitor.
 function activeStatuses() {
   const b = config.orderStatus || {};
-  return [...(b.atStore || []), ...(b.onRoute || [])];
+  return [...(b.collected || []), ...(b.onRoute || [])];
 }
 
 const ORDER_CREATED_FIELDS = ['createdDate', 'createdAt', 'orderDate', 'creationDate', 'dateCreated', 'date'];
@@ -442,17 +457,17 @@ function trackOrders(courierName, courierId, orders, now, seenKeys) {
     const msLeft  = st.dueAt - now;
     const vars    = { nome: courierName, pedido: number, tempo: fmtMinutes(heldMin), prazo: duePhrase(msLeft) };
 
-    if (phase === 'waiting' && heldMin >= (config.noAcceptMinutes || 5) && !st.alerted.noAccept) {
-      st.alerted.noAccept = true;
-      addAlert('noAccept', `${courierName} está há ${fmtMinutes(heldMin)} sem aceitar o pedido #${number}`, courierName, {
+    if (phase === 'waiting' && heldMin >= (config.noCollectMinutes || 5) && !st.alerted.notCollected) {
+      st.alerted.notCollected = true;
+      addAlert('notCollected', `${courierName} está há ${fmtMinutes(heldMin)} sem coletar o pedido #${number}`, courierName, {
         orderNumber: number,
-        suggestedMessage: fillTemplate(config.msgTemplates.noAccept, vars),
+        suggestedMessage: fillTemplate(config.msgTemplates.notCollected, vars),
       });
     }
 
-    if (phase === 'atStore' && heldMin >= (config.noDispatchMinutes || 5) && !st.alerted.noDispatch) {
+    if (phase === 'collected' && heldMin >= (config.noDispatchMinutes || 5) && !st.alerted.noDispatch) {
       st.alerted.noDispatch = true;
-      addAlert('noDispatch', `${courierName} está com o pedido #${number} há ${fmtMinutes(heldMin)} e ainda não saiu`, courierName, {
+      addAlert('noDispatch', `${courierName} coletou o pedido #${number} há ${fmtMinutes(heldMin)} e ainda não saiu`, courierName, {
         orderNumber: number,
         suggestedMessage: fillTemplate(config.msgTemplates.noDispatch, vars),
       });
@@ -613,8 +628,18 @@ function processTracking(trackingList, ordersByCourierList) {
   // (se ele reconectar depois, volta como um novo card, sem ficar preso mostrando timer).
   for (const [id, cs] of courierMap) {
     if (!seenIds.has(id)) {
-      appendLog({ type: 'status_change', courierName: cs.name, from: cs.status, to: 'missing' });
-      addAlert('missing', `${cs.name} sumiu do mapa!`, cs.name);
+      // O card sai da tela, então a última posição dele vai junto do alerta —
+      // é o único rastro de onde ele estava quando o GPS parou de responder.
+      const temPosicao = Number.isFinite(cs.lat) && Number.isFinite(cs.lng);
+      const posicao = temPosicao ? { lat: cs.lat, lng: cs.lng, seenAt: cs.lastSeen } : {};
+      appendLog({
+        type: 'status_change', courierName: cs.name, from: cs.status, to: 'missing',
+        ...(temPosicao ? { lat: cs.lat, lng: cs.lng } : {}),
+      });
+      addAlert('missing', `${cs.name} sumiu do mapa!`, cs.name, {
+        ...posicao,
+        lastOrderNumber: cs.lastOrderNumber || null,
+      });
       courierMap.delete(id);
     }
   }
@@ -814,7 +839,7 @@ app.get('/api/admin/access', (req, res) => {
   res.json({
     allowedIps:        config.allowedIps || [],
     pollIntervalMs:    config.pollIntervalMs || 10000,
-    noAcceptMinutes:   config.noAcceptMinutes,
+    noCollectMinutes:  config.noCollectMinutes,
     noDispatchMinutes: config.noDispatchMinutes,
     promiseMinutes:    config.promiseMinutes,
     lateMarginMinutes: config.lateMarginMinutes,
@@ -833,21 +858,21 @@ app.post('/api/admin/access', (req, res) => {
   if (req.body.pollIntervalMs) {
     config.pollIntervalMs = Math.max(200, parseInt(req.body.pollIntervalMs) || 10000);
   }
-  for (const k of ['noAcceptMinutes', 'noDispatchMinutes', 'promiseMinutes', 'lateMarginMinutes']) {
+  for (const k of ['noCollectMinutes', 'noDispatchMinutes', 'promiseMinutes', 'lateMarginMinutes']) {
     if (req.body[k] != null) config[k] = Math.max(1, parseInt(req.body[k]) || config[k]);
   }
   if (req.body.orderStatus) {
     const b = req.body.orderStatus;
-    for (const fase of ['waiting', 'atStore', 'onRoute']) {
+    for (const fase of ['waiting', 'collected', 'onRoute']) {
       if (!Array.isArray(b[fase])) continue;
       const lista = b[fase].map(x => String(x).trim()).filter(Boolean);
-      // 'waiting' pode ficar vazio (desliga o alerta de aceite). As outras duas não:
+      // 'waiting' pode ficar vazio (desliga o alerta de coleta). As outras duas não:
       // é delas que sai o "está com pedido na mão", que o resto do monitor usa.
       if (lista.length || fase === 'waiting') config.orderStatus[fase] = lista;
     }
   }
   if (req.body.msgTemplates) {
-    for (const k of ['noAccept', 'noDispatch', 'late']) {
+    for (const k of ['notCollected', 'noDispatch', 'late']) {
       if (typeof req.body.msgTemplates[k] === 'string' && req.body.msgTemplates[k].trim()) {
         config.msgTemplates[k] = req.body.msgTemplates[k].trim();
       }

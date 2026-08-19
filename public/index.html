@@ -150,6 +150,20 @@
     .held-order.due { background: rgba(239,68,68,0.14); border-color: rgba(239,68,68,0.45); color: #fca5a5; }
     .held-order .btn-msg { padding: 3px 8px; font-size: 11px; }
 
+    .coords {
+      margin-top: 7px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    }
+    .coords button {
+      background: rgba(148,163,184,0.14); color: var(--text);
+      border: 1px solid var(--border); border-radius: 7px;
+      padding: 4px 9px; font-size: 12px; font-family: monospace;
+      cursor: pointer; letter-spacing: 0.2px;
+    }
+    .coords button:hover { background: rgba(148,163,184,0.26); }
+    .coords a { font-size: 12px; color: #93c5fd; text-decoration: none; }
+    .coords a:hover { text-decoration: underline; }
+    .coords .hint { font-size: 11px; color: var(--muted); }
+
     .msg-box {
       background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
       padding: 12px; font-size: 14px; line-height: 1.5; white-space: pre-wrap;
@@ -565,8 +579,8 @@
           Avisa na tela quando o pedido já caiu pro entregador e continua parado, e
           sugere a mensagem pra mandar pra ele.
         </div>
-        <label class="form-label" style="font-size:12px;">⏳ Cobrar o aceite depois de (min)</label>
-        <input type="number" id="noAcceptInput" value="5" min="1" max="60">
+        <label class="form-label" style="font-size:12px;">⏳ Cobrar a coleta depois de (min)</label>
+        <input type="number" id="noCollectInput" value="5" min="1" max="60">
         <label class="form-label" style="font-size:12px;margin-top:8px;">🛵 Cobrar a saída depois de (min)</label>
         <input type="number" id="noDispatchInput" value="5" min="1" max="60">
         <label class="form-label" style="font-size:12px;margin-top:8px;">⏰ Prazo previsto do pedido (min)</label>
@@ -584,9 +598,9 @@
         <div class="help-box" style="margin-bottom:8px;">
           Use <b>{nome}</b>, <b>{pedido}</b>, <b>{tempo}</b> e <b>{prazo}</b> — o monitor troca pelos valores reais.
         </div>
-        <label class="form-label" style="font-size:12px;">Não aceitou</label>
-        <textarea id="msgNoAcceptInput" style="min-height:56px;"></textarea>
-        <label class="form-label" style="font-size:12px;margin-top:8px;">Aceitou e não saiu</label>
+        <label class="form-label" style="font-size:12px;">Não coletou</label>
+        <textarea id="msgNotCollectedInput" style="min-height:56px;"></textarea>
+        <label class="form-label" style="font-size:12px;margin-top:8px;">Coletou e não saiu</label>
         <textarea id="msgNoDispatchInput" style="min-height:56px;"></textarea>
         <label class="form-label" style="font-size:12px;margin-top:8px;">Vai atrasar</label>
         <textarea id="msgLateInput" style="min-height:56px;"></textarea>
@@ -598,10 +612,10 @@
           Um status por linha. É assim que o monitor sabe em que fase o pedido está —
           se algum status ficar de fora, o pedido não entra nos alertas.
         </div>
-        <label class="form-label" style="font-size:12px;">Caiu pra ele, sem aceitar</label>
+        <label class="form-label" style="font-size:12px;">Caiu pra ele, sem coletar</label>
         <textarea id="stWaitingInput" style="min-height:52px;"></textarea>
-        <label class="form-label" style="font-size:12px;margin-top:8px;">Aceitou, ainda na loja</label>
-        <textarea id="stAtStoreInput" style="min-height:52px;"></textarea>
+        <label class="form-label" style="font-size:12px;margin-top:8px;">Coletado, ainda na loja</label>
+        <textarea id="stCollectedInput" style="min-height:52px;"></textarea>
         <label class="form-label" style="font-size:12px;margin-top:8px;">Saiu pra entrega</label>
         <textarea id="stOnRouteInput" style="min-height:52px;"></textarea>
         <div class="help-box" style="margin-top:8px;">
@@ -925,19 +939,19 @@ async function loadAdminExtras() {
     document.getElementById('allowedIpsInput').value   = (access.allowedIps || []).join('\n');
     document.getElementById('pollIntervalInput').value = access.pollIntervalMs || 10000;
 
-    document.getElementById('noAcceptInput').value   = access.noAcceptMinutes   ?? 5;
+    document.getElementById('noCollectInput').value  = access.noCollectMinutes  ?? 5;
     document.getElementById('noDispatchInput').value = access.noDispatchMinutes ?? 5;
     document.getElementById('promiseInput').value    = access.promiseMinutes    ?? 50;
     document.getElementById('lateMarginInput').value = access.lateMarginMinutes ?? 10;
 
     const t = access.msgTemplates || {};
-    document.getElementById('msgNoAcceptInput').value   = t.noAccept   || '';
+    document.getElementById('msgNotCollectedInput').value = t.notCollected || '';
     document.getElementById('msgNoDispatchInput').value = t.noDispatch || '';
     document.getElementById('msgLateInput').value       = t.late       || '';
 
     const st = access.orderStatus || {};
     document.getElementById('stWaitingInput').value = (st.waiting || []).join('\n');
-    document.getElementById('stAtStoreInput').value = (st.atStore || []).join('\n');
+    document.getElementById('stCollectedInput').value = (st.collected || []).join('\n');
     document.getElementById('stOnRouteInput').value = (st.onRoute || []).join('\n');
 
     const seen = access.statusesSeen || [];
@@ -992,19 +1006,19 @@ async function saveSettings() {
 
   const acesso = {
     allowedIps, pollIntervalMs,
-    noAcceptMinutes:   num('noAcceptInput', 5),
+    noCollectMinutes:  num('noCollectInput', 5),
     noDispatchMinutes: num('noDispatchInput', 5),
     promiseMinutes:    num('promiseInput', 50),
     lateMarginMinutes: num('lateMarginInput', 10),
     msgTemplates: {
-      noAccept:   document.getElementById('msgNoAcceptInput').value.trim(),
+      notCollected: document.getElementById('msgNotCollectedInput').value.trim(),
       noDispatch: document.getElementById('msgNoDispatchInput').value.trim(),
       late:       document.getElementById('msgLateInput').value.trim(),
     },
     orderStatus: {
-      waiting: linhas('stWaitingInput'),
-      atStore: linhas('stAtStoreInput'),
-      onRoute: linhas('stOnRouteInput'),
+      waiting:   linhas('stWaitingInput'),
+      collected: linhas('stCollectedInput'),
+      onRoute:   linhas('stOnRouteInput'),
     },
   };
 
@@ -1130,13 +1144,13 @@ async function dismissAlert(id) {
 
 const ALERT_ICONS = {
   missing: '🚨', cookie: '🍪', single: '✅', shiftEnd: '🌙',
-  noAccept: '⏳', noDispatch: '🛵', late: '⏰', slow: '⚠️',
+  notCollected: '⏳', noDispatch: '🛵', late: '⏰', slow: '⚠️',
 };
 
 const ALERT_TITLES = {
   missing: '🚨 Sumiu do mapa!', single: '✅ Saiu com 1 entrega',
   cookie: '🍪 Cookie expirado!', shiftEnd: '🌙 Expediente encerrado',
-  noAccept: '⏳ Pedido sem aceitar', noDispatch: '🛵 Pedido parado na loja',
+  notCollected: '⏳ Pedido sem coletar', noDispatch: '🛵 Coletou e não saiu',
   late: '⏰ Vai estourar o prazo',
 };
 
@@ -1151,12 +1165,14 @@ function alertCardHtml(a) {
          <button class="btn-msg" onclick="openMsgModal(${a.id})">📩 Sugestão de mensagem</button>
        </div>`
     : '';
+  const coords = coordsHtml(a);
   return `
     <div class="alert-card ${cls}">
       <span class="alert-icon">${icon}</span>
       <div class="alert-body">
         <div class="alert-msg">${a.msg}</div>
         <div class="alert-time">${new Date(a.time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+        ${coords}
         ${msgBtn}
       </div>
       <button class="btn-dismiss" onclick="dismissAlert(${a.id})">✕</button>
@@ -1183,15 +1199,17 @@ function renderAlerts() {
 
   // Alerta de pedido parado fica em destaque enquanto o pedido não sair pra rua —
   // o entregador aqui está "em entrega"/"disponível", então não entra pelo status.
-  const ORDER_ALERTS = new Set(['noAccept', 'noDispatch', 'late']);
+  const ORDER_ALERTS = new Set(['notCollected', 'noDispatch', 'late']);
   const heldNames = new Set(
     [...couriers.values()].filter(c => c.heldOrder).map(c => c.name)
   );
 
-  const isActive = a => !!a.courierName && (
+  // 'missing' fica em destaque mesmo sem card na tela: o entregador sumiu, e é esse
+  // alerta que guarda a última coordenada dele. Sai da tela quando o operador dispensa.
+  const isActive = a => a.type === 'missing' || (!!a.courierName && (
     activeCourierNames.has(a.courierName) ||
     (ORDER_ALERTS.has(a.type) && heldNames.has(a.courierName))
-  );
+  ));
 
   const active  = alerts.filter(isActive);
   const history = alerts.filter(a => !isActive(a));
@@ -1216,6 +1234,48 @@ function toggleAlertsHistory() {
   const open  = list.style.display === 'none';
   list.style.display = open ? 'block' : 'none';
   renderAlerts();
+}
+
+// Última posição de quem sumiu do mapa. O texto é o próprio botão: clicou, copiou —
+// é o formato que o Google Maps entende quando você cola na busca.
+function coordsHtml(a) {
+  if (!Number.isFinite(a.lat) || !Number.isFinite(a.lng)) return '';
+  const txt  = `${a.lat.toFixed(6)}, ${a.lng.toFixed(6)}`;
+  const maps = `https://www.google.com/maps/search/?api=1&query=${a.lat},${a.lng}`;
+  return `
+    <div class="coords">
+      <button id="coord-${a.id}" onclick="copyCoords(${a.id}, '${txt}')" title="Clique pra copiar">📍 ${txt}</button>
+      <a href="${maps}" target="_blank" rel="noopener">abrir no Maps</a>
+      ${a.seenAt ? `<span class="hint">último sinal ${new Date(a.seenAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>` : ''}
+    </div>`;
+}
+
+async function copyCoords(id, txt) {
+  const btn = document.getElementById(`coord-${id}`);
+  const ok  = await copyText(txt);
+  if (!btn) return;
+  btn.textContent = ok ? '✅ copiado!' : '❌ copie na mão: ' + txt;
+  setTimeout(() => { btn.textContent = `📍 ${txt}`; }, 1800);
+}
+
+async function copyText(txt) {
+  try {
+    await navigator.clipboard.writeText(txt);
+    return true;
+  } catch (e) {
+    // Navegador sem clipboard (http puro, iOS antigo): campo escondido + execCommand
+    try {
+      const el = document.createElement('textarea');
+      el.value = txt;
+      el.style.position = 'fixed';
+      el.style.opacity  = '0';
+      document.body.appendChild(el);
+      el.select();
+      const ok = document.execCommand('copy');
+      el.remove();
+      return ok;
+    } catch (e2) { return false; }
+  }
 }
 
 // ─── Mensagem sugerida pro entregador ────────────────────────────────────────
@@ -1247,18 +1307,17 @@ function closeMsgModal() {
 
 async function copySuggestedMessage() {
   const btn = document.getElementById('msgCopyBtn');
-  try {
-    await navigator.clipboard.writeText(msgModalText);
+  if (await copyText(msgModalText)) {
     btn.textContent = '✅ Copiado!';
-  } catch (e) {
-    // Navegador sem clipboard (http, iOS antigo): seleciona pro usuário copiar na mão
-    const range = document.createRange();
-    range.selectNodeContents(document.getElementById('msgModalText'));
-    const sel = window.getSelection();
-    sel.removeAllRanges();
-    sel.addRange(range);
-    btn.textContent = 'Selecionado — use Ctrl+C';
+    return;
   }
+  // Sem clipboard: seleciona o texto pro usuário copiar na mão
+  const range = document.createRange();
+  range.selectNodeContents(document.getElementById('msgModalText'));
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  btn.textContent = 'Selecionado — use Ctrl+C';
 }
 
 // Monta a mensagem do card (o alerta já vem pronto do servidor; aqui é o botão
@@ -1269,8 +1328,8 @@ function suggestedMessageFor(c) {
   const left = h.dueAt - Date.now();
   const prazo = left >= 0 ? `vence em ${fmtMinutes(left / 60000)}` : `estourou há ${fmtMinutes(-left / 60000)}`;
   const tpl = h.phase === 'waiting'
-    ? 'Opa {nome}! O pedido #{pedido} caiu pra você há {tempo} e ainda não foi aceito. Consegue aceitar agora?'
-    : 'Opa {nome}! O pedido #{pedido} já está com você há {tempo} e ainda não saiu pra entrega. Consegue sair agora?';
+    ? 'Opa {nome}! O pedido #{pedido} caiu pra você há {tempo} e ainda não foi coletado. Consegue coletar agora?'
+    : 'Opa {nome}! Você coletou o pedido #{pedido} há {tempo} e ainda não saiu pra entrega. Consegue sair agora?';
   return tpl
     .replace('{nome}', c.name)
     .replace('{pedido}', h.number)
@@ -1356,7 +1415,7 @@ function heldOrderHtml(c, now) {
   const held  = fmtMinutes((now - h.since) / 60000);
   const left  = h.dueAt - now;
   const due   = left <= 0 || left <= alertLateMargin * 60000;
-  const fase  = h.phase === 'waiting' ? 'sem aceitar' : 'parado na loja';
+  const fase  = h.phase === 'waiting' ? 'sem coletar' : 'coletado, na loja';
   const prazo = left >= 0 ? `vence em ${fmtMinutes(left / 60000)}` : `atrasado ${fmtMinutes(-left / 60000)}`;
   return `
     <div class="held-order ${due ? 'due' : ''}">
