@@ -131,6 +131,31 @@
     .alert-msg   { font-size: 13px; font-weight: 600; line-height: 1.4; }
     .alert-time  { font-size: 11px; color: var(--muted); margin-top: 2px; }
 
+    .alert-actions { margin-top: 7px; display: flex; gap: 6px; flex-wrap: wrap; }
+
+    .btn-msg {
+      background: rgba(59,130,246,0.18); color: #93c5fd;
+      border: 1px solid rgba(59,130,246,0.45);
+      border-radius: 7px; padding: 5px 10px;
+      font-size: 12px; font-weight: 600; cursor: pointer;
+    }
+    .btn-msg:hover { background: rgba(59,130,246,0.3); }
+
+    .held-order {
+      margin-top: 8px; padding: 7px 9px; border-radius: 8px;
+      background: rgba(249,115,22,0.12); border: 1px solid rgba(249,115,22,0.35);
+      font-size: 11.5px; color: #fdba74; display: flex;
+      align-items: center; justify-content: space-between; gap: 8px;
+    }
+    .held-order.due { background: rgba(239,68,68,0.14); border-color: rgba(239,68,68,0.45); color: #fca5a5; }
+    .held-order .btn-msg { padding: 3px 8px; font-size: 11px; }
+
+    .msg-box {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 10px;
+      padding: 12px; font-size: 14px; line-height: 1.5; white-space: pre-wrap;
+      margin-bottom: 14px;
+    }
+
     .btn-dismiss {
       background: none; border: none; color: var(--muted);
       font-size: 16px; cursor: pointer; padding: 0 2px; flex-shrink: 0;
@@ -466,6 +491,22 @@
   </div>
 </div>
 
+<!-- ── Modal da mensagem sugerida pro entregador ── -->
+<div class="modal-overlay" id="msgModal">
+  <div class="modal" style="max-width:420px;">
+    <div class="modal-title">📩 Mensagem pro entregador</div>
+    <div class="msg-box" id="msgModalText"></div>
+    <div class="help-box" style="margin-bottom:14px;">
+      O envio automático pelo Foody ainda não está ligado — por enquanto copie o texto
+      e mande pelo app. Dá pra mudar o texto padrão em Configurações.
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeMsgModal()">Fechar</button>
+      <button class="btn btn-primary" id="msgCopyBtn" onclick="copySuggestedMessage()">Copiar mensagem</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Settings Modal ── -->
 <div class="modal-overlay" id="settingsModal">
   <div class="modal">
@@ -519,6 +560,56 @@
       </div>
 
       <div class="form-group">
+        <label class="form-label">🛵 Pedido parado na mão do entregador</label>
+        <div class="help-box" style="margin-bottom:8px;">
+          Avisa na tela quando o pedido já caiu pro entregador e continua parado, e
+          sugere a mensagem pra mandar pra ele.
+        </div>
+        <label class="form-label" style="font-size:12px;">⏳ Cobrar o aceite depois de (min)</label>
+        <input type="number" id="noAcceptInput" value="5" min="1" max="60">
+        <label class="form-label" style="font-size:12px;margin-top:8px;">🛵 Cobrar a saída depois de (min)</label>
+        <input type="number" id="noDispatchInput" value="5" min="1" max="60">
+        <label class="form-label" style="font-size:12px;margin-top:8px;">⏰ Prazo previsto do pedido (min)</label>
+        <input type="number" id="promiseInput" value="50" min="5" max="180">
+        <div class="help-box" style="margin:6px 0 8px;">
+          Provisório: vale pros pedidos em que o Foody não manda previsão. Quando a
+          integração com o CardápioWeb entrar, o prazo real vem de lá.
+        </div>
+        <label class="form-label" style="font-size:12px;">⚠️ Considerar "vai atrasar" faltando (min)</label>
+        <input type="number" id="lateMarginInput" value="10" min="1" max="60">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">💬 Texto das mensagens sugeridas</label>
+        <div class="help-box" style="margin-bottom:8px;">
+          Use <b>{nome}</b>, <b>{pedido}</b>, <b>{tempo}</b> e <b>{prazo}</b> — o monitor troca pelos valores reais.
+        </div>
+        <label class="form-label" style="font-size:12px;">Não aceitou</label>
+        <textarea id="msgNoAcceptInput" style="min-height:56px;"></textarea>
+        <label class="form-label" style="font-size:12px;margin-top:8px;">Aceitou e não saiu</label>
+        <textarea id="msgNoDispatchInput" style="min-height:56px;"></textarea>
+        <label class="form-label" style="font-size:12px;margin-top:8px;">Vai atrasar</label>
+        <textarea id="msgLateInput" style="min-height:56px;"></textarea>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">🏷️ Status de pedido do Foody</label>
+        <div class="help-box" style="margin-bottom:8px;">
+          Um status por linha. É assim que o monitor sabe em que fase o pedido está —
+          se algum status ficar de fora, o pedido não entra nos alertas.
+        </div>
+        <label class="form-label" style="font-size:12px;">Caiu pra ele, sem aceitar</label>
+        <textarea id="stWaitingInput" style="min-height:52px;"></textarea>
+        <label class="form-label" style="font-size:12px;margin-top:8px;">Aceitou, ainda na loja</label>
+        <textarea id="stAtStoreInput" style="min-height:52px;"></textarea>
+        <label class="form-label" style="font-size:12px;margin-top:8px;">Saiu pra entrega</label>
+        <textarea id="stOnRouteInput" style="min-height:52px;"></textarea>
+        <div class="help-box" style="margin-top:8px;">
+          <b>Status vistos hoje:</b> <span id="statusesSeen">—</span>
+        </div>
+      </div>
+
+      <div class="form-group">
         <label class="form-label">👥 Quem conectou (últimas 30)</label>
         <div id="visitsList" style="max-height:180px;overflow-y:auto;font-size:12px;color:var(--muted);"></div>
       </div>
@@ -536,6 +627,7 @@
 const couriers = new Map();
 let alerts           = [];
 let alertMinutes     = 15;
+let alertLateMargin  = 10;
 let readyOrdersCount = 0;
 let lastServerUpdate = null;
 let knownAlertIds    = new Set();
@@ -582,6 +674,7 @@ function applyState(state) {
 
   lastServerUpdate  = state.lastUpdated;
   alertMinutes      = state.alertMinutes;
+  if (state.lateMarginMinutes) alertLateMargin = state.lateMarginMinutes;
   readyOrdersCount  = state.readyOrdersCount;
   document.getElementById('idleBanner').style.display = state.shiftIdle ? 'flex' : 'none';
 
@@ -597,11 +690,7 @@ function applyState(state) {
       knownAlertIds.add(alert.id);
       if (!firstLoad) {
         pushNotification(
-          alert.type === 'missing' ? '🚨 Sumiu do mapa!'
-            : alert.type === 'single' ? '✅ Saiu com 1 entrega'
-            : alert.type === 'cookie' ? '🍪 Cookie expirado!'
-            : alert.type === 'shiftEnd' ? '🌙 Expediente encerrado'
-            : '⚠️ Demora no retorno',
+          alertTitle(alert.type),
           alert.msg,
           `${alert.type}-${alert.courierName || alert.id}`
         );
@@ -835,6 +924,24 @@ async function loadAdminExtras() {
   if (access) {
     document.getElementById('allowedIpsInput').value   = (access.allowedIps || []).join('\n');
     document.getElementById('pollIntervalInput').value = access.pollIntervalMs || 10000;
+
+    document.getElementById('noAcceptInput').value   = access.noAcceptMinutes   ?? 5;
+    document.getElementById('noDispatchInput').value = access.noDispatchMinutes ?? 5;
+    document.getElementById('promiseInput').value    = access.promiseMinutes    ?? 50;
+    document.getElementById('lateMarginInput').value = access.lateMarginMinutes ?? 10;
+
+    const t = access.msgTemplates || {};
+    document.getElementById('msgNoAcceptInput').value   = t.noAccept   || '';
+    document.getElementById('msgNoDispatchInput').value = t.noDispatch || '';
+    document.getElementById('msgLateInput').value       = t.late       || '';
+
+    const st = access.orderStatus || {};
+    document.getElementById('stWaitingInput').value = (st.waiting || []).join('\n');
+    document.getElementById('stAtStoreInput').value = (st.atStore || []).join('\n');
+    document.getElementById('stOnRouteInput').value = (st.onRoute || []).join('\n');
+
+    const seen = access.statusesSeen || [];
+    document.getElementById('statusesSeen').textContent = seen.length ? seen.join(', ') : 'nenhum ainda';
   }
 
   const data = await fetch('/api/admin/visits', { headers }).then(r => r.json()).catch(() => null);
@@ -880,12 +987,34 @@ async function saveSettings() {
   const body = { alertMinutes: mins };
   if (cookie) body.cookie = cookie;
 
+  const linhas = id => document.getElementById(id).value.split('\n').map(x => x.trim()).filter(Boolean);
+  const num    = (id, def) => parseInt(document.getElementById(id).value) || def;
+
+  const acesso = {
+    allowedIps, pollIntervalMs,
+    noAcceptMinutes:   num('noAcceptInput', 5),
+    noDispatchMinutes: num('noDispatchInput', 5),
+    promiseMinutes:    num('promiseInput', 50),
+    lateMarginMinutes: num('lateMarginInput', 10),
+    msgTemplates: {
+      noAccept:   document.getElementById('msgNoAcceptInput').value.trim(),
+      noDispatch: document.getElementById('msgNoDispatchInput').value.trim(),
+      late:       document.getElementById('msgLateInput').value.trim(),
+    },
+    orderStatus: {
+      waiting: linhas('stWaitingInput'),
+      atStore: linhas('stAtStoreInput'),
+      onRoute: linhas('stOnRouteInput'),
+    },
+  };
+
   await Promise.all([
     fetch('/config', { method: 'POST', headers, body: JSON.stringify(body) }),
-    fetch('/api/admin/access', { method: 'POST', headers, body: JSON.stringify({ allowedIps, pollIntervalMs }) }),
+    fetch('/api/admin/access', { method: 'POST', headers, body: JSON.stringify(acesso) }),
   ]);
 
-  alertMinutes = mins;
+  alertMinutes    = mins;
+  alertLateMargin = acesso.lateMarginMinutes;
 
   if (cookie) {
     document.getElementById('cookieInput').value = '';
@@ -999,15 +1128,36 @@ async function dismissAlert(id) {
   renderAlerts();
 }
 
+const ALERT_ICONS = {
+  missing: '🚨', cookie: '🍪', single: '✅', shiftEnd: '🌙',
+  noAccept: '⏳', noDispatch: '🛵', late: '⏰', slow: '⚠️',
+};
+
+const ALERT_TITLES = {
+  missing: '🚨 Sumiu do mapa!', single: '✅ Saiu com 1 entrega',
+  cookie: '🍪 Cookie expirado!', shiftEnd: '🌙 Expediente encerrado',
+  noAccept: '⏳ Pedido sem aceitar', noDispatch: '🛵 Pedido parado na loja',
+  late: '⏰ Vai estourar o prazo',
+};
+
+function alertTitle(type) { return ALERT_TITLES[type] || '⚠️ Demora no retorno'; }
+
 function alertCardHtml(a) {
-  const cls  = a.type === 'missing' || a.type === 'cookie' ? 'danger' : a.type === 'single' || a.type === 'shiftEnd' ? 'good' : 'warn';
-  const icon = a.type === 'missing' ? '🚨' : a.type === 'cookie' ? '🍪' : a.type === 'single' ? '✅' : a.type === 'shiftEnd' ? '🌙' : '⚠️';
+  const cls  = a.type === 'missing' || a.type === 'cookie' || a.type === 'late' || a.urgent ? 'danger'
+    : a.type === 'single' || a.type === 'shiftEnd' ? 'good' : 'warn';
+  const icon = ALERT_ICONS[a.type] || '⚠️';
+  const msgBtn = a.suggestedMessage
+    ? `<div class="alert-actions">
+         <button class="btn-msg" onclick="openMsgModal(${a.id})">📩 Sugestão de mensagem</button>
+       </div>`
+    : '';
   return `
     <div class="alert-card ${cls}">
       <span class="alert-icon">${icon}</span>
       <div class="alert-body">
         <div class="alert-msg">${a.msg}</div>
         <div class="alert-time">${new Date(a.time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+        ${msgBtn}
       </div>
       <button class="btn-dismiss" onclick="dismissAlert(${a.id})">✕</button>
     </div>`;
@@ -1031,8 +1181,20 @@ function renderAlerts() {
     [...couriers.values()].filter(c => badStatuses.has(c.status)).map(c => c.name)
   );
 
-  const active  = alerts.filter(a => a.courierName && activeCourierNames.has(a.courierName));
-  const history = alerts.filter(a => !a.courierName || !activeCourierNames.has(a.courierName));
+  // Alerta de pedido parado fica em destaque enquanto o pedido não sair pra rua —
+  // o entregador aqui está "em entrega"/"disponível", então não entra pelo status.
+  const ORDER_ALERTS = new Set(['noAccept', 'noDispatch', 'late']);
+  const heldNames = new Set(
+    [...couriers.values()].filter(c => c.heldOrder).map(c => c.name)
+  );
+
+  const isActive = a => !!a.courierName && (
+    activeCourierNames.has(a.courierName) ||
+    (ORDER_ALERTS.has(a.type) && heldNames.has(a.courierName))
+  );
+
+  const active  = alerts.filter(isActive);
+  const history = alerts.filter(a => !isActive(a));
 
   section.style.display = active.length > 0 ? 'block' : 'none';
   list.innerHTML = active.map(alertCardHtml).join('');
@@ -1054,6 +1216,66 @@ function toggleAlertsHistory() {
   const open  = list.style.display === 'none';
   list.style.display = open ? 'block' : 'none';
   renderAlerts();
+}
+
+// ─── Mensagem sugerida pro entregador ────────────────────────────────────────
+// Por enquanto só mostra o texto pronto: o envio pelo Foody ainda não está ligado.
+let msgModalText = '';
+
+function openMsgModal(alertId) {
+  const a = alerts.find(x => x.id === alertId);
+  if (!a || !a.suggestedMessage) return;
+  showMsgModal(a.suggestedMessage);
+}
+
+function openMsgForCourier(courierId) {
+  const c = couriers.get(courierId);
+  if (!c || !c.heldOrder) return;
+  showMsgModal(suggestedMessageFor(c));
+}
+
+function showMsgModal(text) {
+  msgModalText = text;
+  document.getElementById('msgModalText').textContent = text;
+  document.getElementById('msgCopyBtn').textContent   = 'Copiar mensagem';
+  document.getElementById('msgModal').classList.add('open');
+}
+
+function closeMsgModal() {
+  document.getElementById('msgModal').classList.remove('open');
+}
+
+async function copySuggestedMessage() {
+  const btn = document.getElementById('msgCopyBtn');
+  try {
+    await navigator.clipboard.writeText(msgModalText);
+    btn.textContent = '✅ Copiado!';
+  } catch (e) {
+    // Navegador sem clipboard (http, iOS antigo): seleciona pro usuário copiar na mão
+    const range = document.createRange();
+    range.selectNodeContents(document.getElementById('msgModalText'));
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    btn.textContent = 'Selecionado — use Ctrl+C';
+  }
+}
+
+// Monta a mensagem do card (o alerta já vem pronto do servidor; aqui é o botão
+// que o operador aperta antes mesmo de estourar o tempo).
+function suggestedMessageFor(c) {
+  const h    = c.heldOrder;
+  const mins = Math.floor((Date.now() - h.since) / 60000);
+  const left = h.dueAt - Date.now();
+  const prazo = left >= 0 ? `vence em ${fmtMinutes(left / 60000)}` : `estourou há ${fmtMinutes(-left / 60000)}`;
+  const tpl = h.phase === 'waiting'
+    ? 'Opa {nome}! O pedido #{pedido} caiu pra você há {tempo} e ainda não foi aceito. Consegue aceitar agora?'
+    : 'Opa {nome}! O pedido #{pedido} já está com você há {tempo} e ainda não saiu pra entrega. Consegue sair agora?';
+  return tpl
+    .replace('{nome}', c.name)
+    .replace('{pedido}', h.number)
+    .replace('{tempo}', fmtMinutes(mins))
+    .replace('{prazo}', prazo);
 }
 
 // ─── Render couriers ──────────────────────────────────────────────────────────
@@ -1118,12 +1340,29 @@ function renderCouriers() {
           <div class="timer ${cfg.timerClass}">${fmtDuration(timerMs)}</div>
           <div class="timer-label">${cfg.timerLabel}</div>
         </div>
+        ${heldOrderHtml(c, now)}
         <div class="card-footer">
           <span>online desde ${new Date(c.onlineAt || c.statusSince).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</span>
           <span>visto ${fmtRelative(c.lastSeen)}</span>
         </div>
       </div>`;
   }).join('');
+}
+
+// Pedido que caiu pro entregador e ainda não foi pra rua.
+function heldOrderHtml(c, now) {
+  const h = c.heldOrder;
+  if (!h) return '';
+  const held  = fmtMinutes((now - h.since) / 60000);
+  const left  = h.dueAt - now;
+  const due   = left <= 0 || left <= alertLateMargin * 60000;
+  const fase  = h.phase === 'waiting' ? 'sem aceitar' : 'parado na loja';
+  const prazo = left >= 0 ? `vence em ${fmtMinutes(left / 60000)}` : `atrasado ${fmtMinutes(-left / 60000)}`;
+  return `
+    <div class="held-order ${due ? 'due' : ''}">
+      <span>#${h.number} ${fase} há ${held} · ${prazo}</span>
+      <button class="btn-msg" onclick="openMsgForCourier('${c.id}')">📩</button>
+    </div>`;
 }
 
 // ─── UI helpers ───────────────────────────────────────────────────────────────

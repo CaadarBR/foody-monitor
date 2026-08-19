@@ -29,6 +29,27 @@ let config = {
   adminPassword: '',   // senha do ADM MASTER (John) — protege Configurações e libera os dados
   allowedIps: [],       // IPs liberados a ver os dados sem precisar logar como ADM
   pollIntervalMs: 10000, // de quanto em quanto tempo consulta o Foody
+
+  // ── Pedido parado na mão do entregador ─────────────────────────────────────
+  noAcceptMinutes:   5,  // caiu pra ele e ele não aceitou
+  noDispatchMinutes: 5,  // aceitou mas continua na loja
+  promiseMinutes:   50,  // prazo padrão do pedido (provisório, até o CardápioWeb entrar)
+  lateMarginMinutes: 10, // faltando isso pro prazo, já conta como "vai atrasar"
+
+  // O Foody não documenta os nomes de status, então eles ficam aqui pra serem
+  // ajustados sem mexer no código. O que não estiver em nenhuma lista aparece
+  // no log e no ADM ("status vistos") pra ser encaixado depois.
+  orderStatus: {
+    waiting: ['pending', 'waiting', 'assigned', 'new', 'created', 'sent'], // na mão dele, sem aceitar
+    atStore: ['accepted'],                                                 // aceitou, ainda na loja
+    onRoute: ['onGoing', 'dispatched', 'inRoute', 'onTheWay'],             // saiu pra rua
+  },
+
+  msgTemplates: {
+    noAccept:   'Opa {nome}! O pedido #{pedido} caiu pra você há {tempo} e ainda não foi aceito. Consegue aceitar agora?',
+    noDispatch: 'Opa {nome}! O pedido #{pedido} já está com você há {tempo} e ainda não saiu pra entrega. Consegue sair agora?',
+    late:       '{nome}, o pedido #{pedido} {prazo} e ainda não saiu da loja. Precisa sair agora pra não atrasar!',
+  },
 };
 
 function loadConfig() {
@@ -44,6 +65,11 @@ function loadConfig() {
       if (saved.adminPassword) config.adminPassword = saved.adminPassword;
       if (Array.isArray(saved.allowedIps)) config.allowedIps = saved.allowedIps;
       if (saved.pollIntervalMs) config.pollIntervalMs = saved.pollIntervalMs;
+      for (const k of ['noAcceptMinutes', 'noDispatchMinutes', 'promiseMinutes', 'lateMarginMinutes']) {
+        if (saved[k] != null) config[k] = saved[k];
+      }
+      if (saved.orderStatus)  config.orderStatus  = { ...config.orderStatus,  ...saved.orderStatus };
+      if (saved.msgTemplates) config.msgTemplates = { ...config.msgTemplates, ...saved.msgTemplates };
     } catch (e) {}
   }
 }
@@ -285,17 +311,24 @@ function fmtMinutes(totalMinutes) {
   return h > 0 ? `${h}h${String(m).padStart(2, '0')}min` : `${m}min`;
 }
 
-function addAlert(type, msg, courierName = null) {
-  activeAlerts.unshift({ id: Date.now(), type, msg, time: new Date().toISOString(), courierName });
+function alertTitle(type) {
+  return type === 'missing'    ? '🚨 Sumiu do mapa!'
+    : type === 'single'        ? '✅ Saiu com 1 entrega'
+    : type === 'cookie'        ? '🍪 Cookie expirado!'
+    : type === 'shiftEnd'      ? '🌙 Expediente encerrado'
+    : type === 'noAccept'      ? '⏳ Pedido sem aceitar'
+    : type === 'noDispatch'    ? '🛵 Pedido parado na loja'
+    : type === 'late'          ? '⏰ Vai estourar o prazo'
+    : '⚠️ Demora no retorno';
+}
+
+function addAlert(type, msg, courierName = null, extra = {}) {
+  activeAlerts.unshift({ id: Date.now(), type, msg, time: new Date().toISOString(), courierName, ...extra });
   if (activeAlerts.length > 30) activeAlerts.pop();
   appendLog({ type: 'alert', alertType: type, msg });
   console.log(`[ALERTA] ${msg}`);
   sendPush({
-    title: type === 'missing' ? '🚨 Sumiu do mapa!'
-      : type === 'single'    ? '✅ Saiu com 1 entrega'
-      : type === 'cookie'    ? '🍪 Cookie expirado!'
-      : type === 'shiftEnd'  ? '🌙 Expediente encerrado'
-      : '⚠️ Demora no retorno',
+    title: alertTitle(type),
     body: msg,
     tag: `${type}-${courierName || Date.now()}`,
     type,
@@ -306,10 +339,148 @@ function orderNumberOf(o) {
   return o.orderNumber ?? o.number ?? o.code ?? o.orderCode ?? o.orderId ?? o.id ?? null;
 }
 
+function orderKeyOf(o) {
+  return String(o.id ?? o.orderId ?? o.orderNumber ?? o.number ?? o.code ?? JSON.stringify(o).slice(0, 60));
+}
+
+// ── Pedido parado na mão do entregador ───────────────────────────────────────
+// Todo pedido passa por três fases até ir pra rua: cai pro entregador (waiting),
+// ele aceita mas continua na loja (atStore) e finalmente sai (onRoute). O alerta
+// mora nas duas primeiras — depois que saiu, não tem mais o que cobrar.
+
+const orderTracker      = new Map(); // "courierId:pedido" → fase + desde quando
+const seenOrderStatuses = new Set(); // vocabulário real do Foody, pro ADM conferir
+const warnedStatuses    = new Set();
+let   orderFieldsSeen   = [];        // campos que o pedido traz (pra achar o prazo real)
+
+function orderPhase(status) {
+  const s = String(status || '');
+  const b = config.orderStatus || {};
+  if ((b.onRoute || []).includes(s)) return 'onRoute';
+  if ((b.atStore || []).includes(s)) return 'atStore';
+  if ((b.waiting || []).includes(s)) return 'waiting';
+  if (['delivered', 'canceled', 'cancelled', 'concluded', 'finished'].includes(s)) return 'done';
+  return 'unknown';
+}
+
+// Statuses que contam como "pedido na mão dele" pro resto do monitor.
+function activeStatuses() {
+  const b = config.orderStatus || {};
+  return [...(b.atStore || []), ...(b.onRoute || [])];
+}
+
+const ORDER_CREATED_FIELDS = ['createdDate', 'createdAt', 'orderDate', 'creationDate', 'dateCreated', 'date'];
+const ORDER_DUE_FIELDS     = ['deliveryForecast', 'deliveryForecastDate', 'forecastDate', 'promisedDate', 'deliveryDeadline', 'estimatedDeliveryDate'];
+
+function firstDateOf(o, fields) {
+  for (const f of fields) {
+    if (!o[f]) continue;
+    const t = new Date(o[f]).getTime();
+    if (!Number.isNaN(t)) return t;
+  }
+  return null;
+}
+
+// Prazo do pedido. Usa a previsão que vier do Foody; se não vier nenhuma, cai no
+// prazo padrão configurado, contado da criação do pedido. É esse pedaço que o
+// CardápioWeb vai substituir quando a integração existir.
+function orderDueAt(o, firstSeen) {
+  const explicit = firstDateOf(o, ORDER_DUE_FIELDS);
+  if (explicit) return explicit;
+  const created = firstDateOf(o, ORDER_CREATED_FIELDS) || firstSeen;
+  return created + (config.promiseMinutes || 50) * 60000;
+}
+
+function fillTemplate(tpl, vars) {
+  return String(tpl || '').replace(/\{(\w+)\}/g, (_, k) => (vars[k] != null ? vars[k] : `{${k}}`));
+}
+
+// "vence em 8min" / "estourou há 3min"
+function duePhrase(msLeft) {
+  return msLeft >= 0 ? `vence em ${fmtMinutes(msLeft / 60000)}` : `estourou há ${fmtMinutes(-msLeft / 60000)}`;
+}
+
+// Acompanha os pedidos de um entregador e dispara os alertas de pedido parado.
+// Devolve o pedido parado há mais tempo, pra aparecer no card dele na tela.
+function trackOrders(courierName, courierId, orders, now, seenKeys) {
+  let held = null;
+
+  for (const o of orders) {
+    if (!orderFieldsSeen.length) {
+      orderFieldsSeen = Object.keys(o);
+      console.log(`[INFO] campos do pedido no Foody: ${orderFieldsSeen.join(', ')}`);
+    }
+    if (o.status) seenOrderStatuses.add(String(o.status));
+    const phase = orderPhase(o.status);
+    if (phase === 'done') continue;
+    if (phase === 'unknown') {
+      if (!warnedStatuses.has(o.status)) {
+        warnedStatuses.add(o.status);
+        console.log(`[INFO] status de pedido desconhecido: "${o.status}" — encaixe ele em orderStatus pra valer nos alertas de pedido parado.`);
+      }
+      continue;
+    }
+
+    const key = `${courierId}:${orderKeyOf(o)}`;
+    seenKeys.add(key);
+
+    let st = orderTracker.get(key);
+    if (!st) {
+      st = { phase, since: now, firstSeen: now, alerted: {} };
+      orderTracker.set(key, st);
+    }
+    if (st.phase !== phase) {  // mudou de fase → o relógio recomeça
+      st.phase = phase;
+      st.since = now;
+    }
+    st.dueAt = orderDueAt(o, st.firstSeen);
+
+    if (phase === 'onRoute') continue; // já está na rua, não tem o que cobrar
+
+    const number  = orderNumberOf(o);
+    const heldMin = (now - st.since) / 60000;
+    const msLeft  = st.dueAt - now;
+    const vars    = { nome: courierName, pedido: number, tempo: fmtMinutes(heldMin), prazo: duePhrase(msLeft) };
+
+    if (phase === 'waiting' && heldMin >= (config.noAcceptMinutes || 5) && !st.alerted.noAccept) {
+      st.alerted.noAccept = true;
+      addAlert('noAccept', `${courierName} está há ${fmtMinutes(heldMin)} sem aceitar o pedido #${number}`, courierName, {
+        orderNumber: number,
+        suggestedMessage: fillTemplate(config.msgTemplates.noAccept, vars),
+      });
+    }
+
+    if (phase === 'atStore' && heldMin >= (config.noDispatchMinutes || 5) && !st.alerted.noDispatch) {
+      st.alerted.noDispatch = true;
+      addAlert('noDispatch', `${courierName} está com o pedido #${number} há ${fmtMinutes(heldMin)} e ainda não saiu`, courierName, {
+        orderNumber: number,
+        suggestedMessage: fillTemplate(config.msgTemplates.noDispatch, vars),
+      });
+    }
+
+    // Vai estourar o prazo com o pedido ainda na loja.
+    if (msLeft <= (config.lateMarginMinutes || 10) * 60000 && !st.alerted.late) {
+      st.alerted.late = true;
+      addAlert('late', `Pedido #${number} com ${courierName} ${duePhrase(msLeft)} e ainda não saiu!`, courierName, {
+        orderNumber: number,
+        urgent: true,
+        suggestedMessage: fillTemplate(config.msgTemplates.late, vars),
+      });
+    }
+
+    if (!held || st.since < held.since) {
+      held = { number, phase, since: st.since, dueAt: st.dueAt };
+    }
+  }
+
+  return held;
+}
+
 function processTracking(trackingList, ordersByCourierList) {
   const now        = Date.now();
   const shiftStart = operationalDayStartMs();
   const seenIds    = new Set(trackingList.map(c => c.courierId));
+  const seenOrders = new Set();
 
   const ordersByName = new Map();
   for (const co of ordersByCourierList) {
@@ -321,7 +492,9 @@ function processTracking(trackingList, ordersByCourierList) {
     const name = tc.courierName.trim();
     const all  = ordersByName.get(name) || [];
 
-    const activeOrders    = all.filter(o => ['onGoing', 'accepted', 'dispatched'].includes(o.status));
+    const activeOrders    = all.filter(o => activeStatuses().includes(o.status));
+    // Pedido que caiu pra ele e ainda não foi pra rua — rende alerta e sugestão de mensagem
+    const heldOrder       = trackOrders(name, id, all, now, seenOrders);
     // Só conta entrega do turno atual — senão um entregador sem entrega hoje ainda
     // pega uma entrega antiga (de dias atrás) como referência e o timer de "descansando" explode.
     const deliveredOrders = all.filter(o =>
@@ -353,6 +526,7 @@ function processTracking(trackingList, ordersByCourierList) {
         lastSeen: now,
         lat: tc.latitute, lng: tc.longitude,
         activeOrderCount: activeOrders.length,
+        heldOrder,
         finishedAt,
         lastActiveAt: activeOrders.length > 0 ? now : null,
         lastOrderNumber,
@@ -370,6 +544,7 @@ function processTracking(trackingList, ordersByCourierList) {
     cs.lat = tc.latitute;
     cs.lng = tc.longitude;
     cs.activeOrderCount = activeOrders.length;
+    cs.heldOrder        = heldOrder;
     if (lastOrderNumber != null) cs.lastOrderNumber = lastOrderNumber;
 
     if (activeOrders.length > 0) {
@@ -427,6 +602,11 @@ function processTracking(trackingList, ordersByCourierList) {
     if (cs.status !== prev) {
       appendLog({ type: 'status_change', courierName: cs.name, from: prev, to: cs.status });
     }
+  }
+
+  // Pedido que saiu da lista (entregue, cancelado ou reatribuído) sai do rastreio
+  for (const key of orderTracker.keys()) {
+    if (!seenOrders.has(key)) orderTracker.delete(key);
   }
 
   // Detecta quem sumiu do mapa — avisa uma vez e tira o card da tela
@@ -524,9 +704,11 @@ function buildStatePayload() {
     readyOrdersCount,
     shiftIdle,
     alertMinutes:     config.alertMinutes,
+    lateMarginMinutes: config.lateMarginMinutes,
     couriers:         [...courierMap.values()],
     alerts:           activeAlerts,
     serverStartedAt:  SERVER_STARTED_AT,
+    orderStatusesSeen: [...seenOrderStatuses],
   };
 }
 
@@ -630,8 +812,16 @@ app.get('/api/admin/visits', (req, res) => {
 app.get('/api/admin/access', (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'unauthorized' });
   res.json({
-    allowedIps:     config.allowedIps || [],
-    pollIntervalMs: config.pollIntervalMs || 10000,
+    allowedIps:        config.allowedIps || [],
+    pollIntervalMs:    config.pollIntervalMs || 10000,
+    noAcceptMinutes:   config.noAcceptMinutes,
+    noDispatchMinutes: config.noDispatchMinutes,
+    promiseMinutes:    config.promiseMinutes,
+    lateMarginMinutes: config.lateMarginMinutes,
+    orderStatus:       config.orderStatus,
+    msgTemplates:      config.msgTemplates,
+    statusesSeen:      [...seenOrderStatuses],
+    orderFieldsSeen,
   });
 });
 
@@ -642,6 +832,26 @@ app.post('/api/admin/access', (req, res) => {
   }
   if (req.body.pollIntervalMs) {
     config.pollIntervalMs = Math.max(200, parseInt(req.body.pollIntervalMs) || 10000);
+  }
+  for (const k of ['noAcceptMinutes', 'noDispatchMinutes', 'promiseMinutes', 'lateMarginMinutes']) {
+    if (req.body[k] != null) config[k] = Math.max(1, parseInt(req.body[k]) || config[k]);
+  }
+  if (req.body.orderStatus) {
+    const b = req.body.orderStatus;
+    for (const fase of ['waiting', 'atStore', 'onRoute']) {
+      if (!Array.isArray(b[fase])) continue;
+      const lista = b[fase].map(x => String(x).trim()).filter(Boolean);
+      // 'waiting' pode ficar vazio (desliga o alerta de aceite). As outras duas não:
+      // é delas que sai o "está com pedido na mão", que o resto do monitor usa.
+      if (lista.length || fase === 'waiting') config.orderStatus[fase] = lista;
+    }
+  }
+  if (req.body.msgTemplates) {
+    for (const k of ['noAccept', 'noDispatch', 'late']) {
+      if (typeof req.body.msgTemplates[k] === 'string' && req.body.msgTemplates[k].trim()) {
+        config.msgTemplates[k] = req.body.msgTemplates[k].trim();
+      }
+    }
   }
   saveConfig();
   res.json({ ok: true });
