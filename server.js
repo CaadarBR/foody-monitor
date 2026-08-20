@@ -699,8 +699,9 @@ app.get('/api/log', (req, res) => {
 app.get('/api/logs', (req, res) => {
   if (!hasDataAccess(req)) return res.status(401).json({ dates: [] });
   try {
+    // Só os arquivos de log diário (YYYY-MM-DD.json) — ignora config/visits/state/push-subscriptions
     const dates = fs.readdirSync(LOGS_DIR)
-      .filter(f => f.endsWith('.json'))
+      .filter(f => /^\d{4}-\d{2}-\d{2}\.json$/.test(f))
       .map(f => f.replace('.json', ''))
       .sort().reverse();
     res.json({ dates });
