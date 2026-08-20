@@ -1120,7 +1120,7 @@ function alertCardHtml(a) {
       <span class="alert-icon">${icon}</span>
       <div class="alert-body">
         <div class="alert-msg">${a.msg}${(a.lat && a.lng) ? ` <a class="coord-link" href="https://www.google.com/maps?q=${a.lat},${a.lng}" target="_blank" rel="noopener" title="Abrir no Google Maps">${a.lat}, ${a.lng}</a>` : ''}</div>
-        <div class="alert-time">${new Date(a.time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}${a.courierName ? ` <button class="alert-nudge" data-name="${(a.courierName || '').replace(/"/g,'&quot;')}" onclick="openNudge(this)">⚠️ alertar entregador</button>` : ''}</div>
+        <div class="alert-time">${new Date(a.time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}${a.type === 'slow' ? ` <button class="alert-nudge" data-name="${(a.courierName || '').replace(/"/g,'&quot;')}" onclick="openNudge(this)">⚠️ alertar entregador</button>` : ''}</div>
       </div>
       <button class="btn-dismiss" onclick="dismissAlert(${a.id})">✕</button>
     </div>`;
