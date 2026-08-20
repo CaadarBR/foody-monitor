@@ -597,11 +597,12 @@ app.get('/api/nudge-debug', async (req, res) => {
     'cookie': config.cookie,
     'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
   };
+  const h = { ...base, referer: 'https://app.foodydelivery.com/u/0/conversations', origin: 'https://app.foodydelivery.com' };
   const variants = [
-    { label: 'atual', headers: foodyHeaders(), url: 'https://app.foodydelivery.com/api/v2/conversations/couriers-for-conversation?_=' + Date.now() },
-    { label: 'sem_ts', headers: { ...base, referer: 'https://app.foodydelivery.com/u/0/conversations', origin: 'https://app.foodydelivery.com' }, url: 'https://app.foodydelivery.com/api/v2/conversations/couriers-for-conversation' },
-    { label: 'referer_conv', headers: { ...base, referer: 'https://app.foodydelivery.com/u/0/conversations', origin: 'https://app.foodydelivery.com' }, url: 'https://app.foodydelivery.com/api/v2/conversations/couriers-for-conversation?_=' + Date.now() },
-    { label: 'list', headers: { ...base, referer: 'https://app.foodydelivery.com/u/0/conversations', origin: 'https://app.foodydelivery.com' }, url: 'https://app.foodydelivery.com/api/v2/conversations/list?_=' + Date.now() },
+    { label: 'user-state',   headers: h, url: 'https://app.foodydelivery.com/api/v2/notifications/user-state?_=' + Date.now() },
+    { label: 'navbar',       headers: h, url: 'https://app.foodydelivery.com/api/v2/navbar/top-items?_=' + Date.now() },
+    { label: 'ws-token',     headers: h, url: 'https://app.foodydelivery.com/api/v2/company/auth/company-websocket-access-token?_=' + Date.now() },
+    { label: 'couriers-conv',headers: h, url: 'https://app.foodydelivery.com/api/v2/conversations/couriers-for-conversation?_=' + Date.now() },
   ];
   const out = [];
   for (const v of variants) {
