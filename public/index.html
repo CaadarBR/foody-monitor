@@ -137,6 +137,20 @@
     }
     .coord-link:hover { opacity: 1; text-decoration: underline; }
 
+    .alert-nudge {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 0;
+      margin-left: 10px;
+      opacity: 0.65;
+      transition: opacity 0.2s, color 0.2s;
+    }
+    .alert-nudge:hover { opacity: 1; color: var(--yellow); text-decoration: underline; }
+
     .alert-icon  { font-size: 18px; margin-top: 1px; flex-shrink: 0; }
     .alert-body  { flex: 1; }
     .alert-msg   { font-size: 13px; font-weight: 600; line-height: 1.4; }
@@ -1106,7 +1120,7 @@ function alertCardHtml(a) {
       <span class="alert-icon">${icon}</span>
       <div class="alert-body">
         <div class="alert-msg">${a.msg}${(a.lat && a.lng) ? ` <a class="coord-link" href="https://www.google.com/maps?q=${a.lat},${a.lng}" target="_blank" rel="noopener" title="Abrir no Google Maps">${a.lat}, ${a.lng}</a>` : ''}</div>
-        <div class="alert-time">${new Date(a.time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
+        <div class="alert-time">${new Date(a.time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}${a.courierName ? ` <button class="alert-nudge" data-name="${(a.courierName || '').replace(/"/g,'&quot;')}" onclick="openNudge(this)">⚠️ alertar entregador</button>` : ''}</div>
       </div>
       <button class="btn-dismiss" onclick="dismissAlert(${a.id})">✕</button>
     </div>`;
