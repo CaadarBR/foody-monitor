@@ -569,7 +569,7 @@
   </div>
 </div>
 
-<!-- ── Cutucar entregador Modal ── -->
+<!-- ── Alerta entregador Modal ── -->
 <div class="modal-overlay" id="nudgeModal">
   <div class="modal">
     <div class="modal-title">⚠️ Alertar <span id="nudgeName"></span></div>
@@ -591,7 +591,7 @@
 </div>
 
 <script>
-// ─── Cutucar entregador ───────────────────────────────────────────────────────
+// ─── Alerta entregador ────────────────────────────────────────────────────────
 let nudgeTarget = null;
 function openNudge(btn) {
   nudgeTarget = btn.getAttribute('data-name');
@@ -1105,7 +1105,7 @@ function alertCardHtml(a) {
     <div class="alert-card ${cls}">
       <span class="alert-icon">${icon}</span>
       <div class="alert-body">
-        <div class="alert-msg">${a.msg}${(a.lat && a.lng) ? ` <a class="coord-link" href="https://www.google.com/maps?q=${a.lat},${a.lng}" target="_blank" rel="noopener" title="Ver no mapa">${a.lat}, ${a.lng}</a>` : ''}</div>
+        <div class="alert-msg">${a.msg}${(a.lat && a.lng) ? ` <a class="coord-link" href="https://www.google.com/maps?q=${a.lat},${a.lng}" target="_blank" rel="noopener" title="Abrir no Google Maps">${a.lat}, ${a.lng}</a>` : ''}</div>
         <div class="alert-time">${new Date(a.time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
       </div>
       <button class="btn-dismiss" onclick="dismissAlert(${a.id})">✕</button>
