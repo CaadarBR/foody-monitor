@@ -291,7 +291,7 @@ loadOnlineTimes();
 function addAlert(type, msg, courierName = null, extra = {}) {
   activeAlerts.unshift({ id: Date.now(), type, msg, time: new Date().toISOString(), courierName, ...extra });
   if (activeAlerts.length > 30) activeAlerts.pop();
-  appendLog({ type: 'alert', alertType: type, msg });
+  appendLog({ type: 'alert', alertType: type, msg, courierName });
   console.log(`[ALERTA] ${msg}`);
   sendPush({
     title: type === 'missing' ? '🚨 Sumiu do mapa!'

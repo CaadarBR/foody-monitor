@@ -511,6 +511,15 @@
       <button class="log-filter-btn active" id="logFilter_all" onclick="setLogFilter('all')">Todos</button>
       <button class="log-filter-btn" id="logFilter_alerts" onclick="setLogFilter('alerts')">Alertas</button>
       <button class="log-filter-btn" id="logFilter_couriers" onclick="setLogFilter('couriers')">Entregadores</button>
+      <select class="log-date-sel" id="logCourierSel" onchange="setLogCourier(this.value)"><option value="">Todos entregadores</option></select>
+      <select class="log-date-sel" id="logAlertTypeSel" onchange="setLogAlertType(this.value)">
+        <option value="">Todos os tipos</option>
+        <option value="slow">⚠️ Demora no retorno</option>
+        <option value="missing">🚨 Sumiu do mapa</option>
+        <option value="single">✅ Saiu com 1 pedido</option>
+        <option value="cookie">🍪 Cookie expirado</option>
+        <option value="shiftEnd">🌙 Expediente encerrado</option>
+      </select>
     </div>
     <div class="log-entries" id="logEntries">
       <div class="log-empty">Carregando...</div>
@@ -707,8 +716,11 @@ function applyState(state) {
 
   if (state.serverStartedAt) {
     const upMin = Math.floor((Date.now() - state.serverStartedAt) / 60000);
-    document.getElementById('serverUptime').textContent =
-      upMin < 1 ? '⚠️ servidor reiniciou agora' : `servidor: ${upMin}min no ar`;
+    let upTxt;
+    if (upMin < 1)       upTxt = '⚠️ servidor reiniciou agora';
+    else if (upMin < 60) upTxt = `servidor: ${upMin}min no ar`;
+    else                 upTxt = `servidor: ${Math.floor(upMin / 60)}h${String(upMin % 60).padStart(2, '0')}min no ar`;
+    document.getElementById('serverUptime').textContent = upTxt;
   }
 
   // Detecta alertas novos → toca som (ignora os que já existiam ao abrir)
@@ -778,6 +790,8 @@ const STATUS_PT = {
 let currentLogs    = [];
 let currentLogDate = '';
 let logFilter      = 'all';
+let logCourier     = '';
+let logAlertType   = '';
 
 async function openLog() {
   document.getElementById('logModal').classList.add('open');
@@ -812,8 +826,18 @@ async function loadLog(date) {
   try {
     const data  = await fetch(`/api/log?date=${date}`).then(r => r.json());
     currentLogs = data.logs || [];
+    populateCourierFilter();
     renderLog();
   } catch (e) {}
+}
+
+// Monta o seletor "por entregador" com os nomes que aparecem no dia
+function populateCourierFilter() {
+  const names = [...new Set(currentLogs.map(e => e.courierName).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const sel = document.getElementById('logCourierSel');
+  if (!names.includes(logCourier)) logCourier = '';
+  sel.innerHTML = '<option value="">Todos entregadores</option>' +
+    names.map(n => `<option value="${n}"${n === logCourier ? ' selected' : ''}>${n}</option>`).join('');
 }
 
 function setLogFilter(f) {
@@ -823,11 +847,23 @@ function setLogFilter(f) {
   renderLog();
 }
 
+function setLogCourier(v)   { logCourier = v;   renderLog(); }
+function setLogAlertType(v) { logAlertType = v; renderLog(); }
+
 function renderLog() {
   const container = document.getElementById('logEntries');
   const filtered  = currentLogs.filter(e => {
-    if (logFilter === 'alerts')   return e.type === 'alert';
-    if (logFilter === 'couriers') return ['status_change', 'courier_online'].includes(e.type);
+    // filtro de categoria (botões)
+    if (logFilter === 'alerts'   && e.type !== 'alert') return false;
+    if (logFilter === 'couriers' && !['status_change', 'courier_online'].includes(e.type)) return false;
+    // filtro por tipo de alerta (só deixa passar alertas daquele tipo)
+    if (logAlertType && !(e.type === 'alert' && e.alertType === logAlertType)) return false;
+    // filtro por entregador (usa courierName; nos logs antigos de alerta, cai pro texto)
+    if (logCourier) {
+      const nm = e.courierName || '';
+      const ok = nm === logCourier || (!nm && e.msg && e.msg.startsWith(logCourier));
+      if (!ok) return false;
+    }
     return true;
   });
 
