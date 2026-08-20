@@ -597,22 +597,20 @@ app.get('/api/nudge-debug', async (req, res) => {
     'cookie': config.cookie,
     'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
   };
+  // path=... escolhe o endpoint v2; qualquer h_<nome>=valor vira header extra
+  const path = req.query.path || '/api/v2/conversations/couriers-for-conversation';
   const h = { ...base, referer: 'https://app.foodydelivery.com/u/0/conversations', origin: 'https://app.foodydelivery.com' };
-  const variants = [
-    { label: 'user-state',   headers: h, url: 'https://app.foodydelivery.com/api/v2/notifications/user-state?_=' + Date.now() },
-    { label: 'navbar',       headers: h, url: 'https://app.foodydelivery.com/api/v2/navbar/top-items?_=' + Date.now() },
-    { label: 'ws-token',     headers: h, url: 'https://app.foodydelivery.com/api/v2/company/auth/company-websocket-access-token?_=' + Date.now() },
-    { label: 'couriers-conv',headers: h, url: 'https://app.foodydelivery.com/api/v2/conversations/couriers-for-conversation?_=' + Date.now() },
-  ];
-  const out = [];
-  for (const v of variants) {
-    try {
-      const r = await fetch(v.url, { headers: v.headers });
-      const text = await r.text();
-      out.push({ label: v.label, status: r.status, body: text.slice(0, 300) });
-    } catch (e) { out.push({ label: v.label, error: e.message }); }
+  for (const [k, v] of Object.entries(req.query)) {
+    if (k.startsWith('h_')) h[k.slice(2).replace(/_/g, '-')] = v;
   }
-  res.json(out);
+  const url = 'https://app.foodydelivery.com' + path + (path.includes('?') ? '' : '?_=' + Date.now());
+  try {
+    const r = await fetch(url, { headers: h });
+    const text = await r.text();
+    res.json({ url, sentHeaders: Object.keys(h), status: r.status, body: text.slice(0, 400) });
+  } catch (e) {
+    res.json({ url, error: e.message });
+  }
 });
 
 app.get('/config', (req, res) => {
