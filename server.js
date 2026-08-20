@@ -588,6 +588,22 @@ app.post('/api/nudge', async (req, res) => {
   }
 });
 
+// TEMP debug — inspecionar o que o Foody devolve em couriers-for-conversation
+app.get('/api/nudge-debug', async (req, res) => {
+  try {
+    const r = await fetch('https://app.foodydelivery.com/api/v2/conversations/couriers-for-conversation?_=' + Date.now(), {
+      headers: foodyHeaders(),
+    });
+    const status = r.status;
+    const text = await r.text();
+    let parsed = null, names = null;
+    try { parsed = JSON.parse(text); names = (parsed.couriers || []).map(c => c.courierName); } catch (e) {}
+    res.json({ status, count: names ? names.length : null, names, raw: names ? undefined : text.slice(0, 500) });
+  } catch (e) {
+    res.json({ error: e.message });
+  }
+});
+
 app.get('/config', (req, res) => {
   res.json({ configured: !!config.cookie, usingEnv: !!process.env.FOODY_COOKIE });
 });
