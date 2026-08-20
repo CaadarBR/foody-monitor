@@ -590,18 +590,28 @@ app.post('/api/nudge', async (req, res) => {
 
 // TEMP debug — inspecionar o que o Foody devolve em couriers-for-conversation
 app.get('/api/nudge-debug', async (req, res) => {
-  try {
-    const r = await fetch('https://app.foodydelivery.com/api/v2/conversations/couriers-for-conversation?_=' + Date.now(), {
-      headers: foodyHeaders(),
-    });
-    const status = r.status;
-    const text = await r.text();
-    let parsed = null, names = null;
-    try { parsed = JSON.parse(text); names = (parsed.couriers || []).map(c => c.courierName); } catch (e) {}
-    res.json({ status, count: names ? names.length : null, names, raw: names ? undefined : text.slice(0, 500) });
-  } catch (e) {
-    res.json({ error: e.message });
+  const base = {
+    'accept': 'application/json, text/plain, */*',
+    'accept-language': 'pt-BR,pt;q=0.9',
+    'x-requested-with': 'XMLHttpRequest',
+    'cookie': config.cookie,
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
+  };
+  const variants = [
+    { label: 'atual', headers: foodyHeaders(), url: 'https://app.foodydelivery.com/api/v2/conversations/couriers-for-conversation?_=' + Date.now() },
+    { label: 'sem_ts', headers: { ...base, referer: 'https://app.foodydelivery.com/u/0/conversations', origin: 'https://app.foodydelivery.com' }, url: 'https://app.foodydelivery.com/api/v2/conversations/couriers-for-conversation' },
+    { label: 'referer_conv', headers: { ...base, referer: 'https://app.foodydelivery.com/u/0/conversations', origin: 'https://app.foodydelivery.com' }, url: 'https://app.foodydelivery.com/api/v2/conversations/couriers-for-conversation?_=' + Date.now() },
+    { label: 'list', headers: { ...base, referer: 'https://app.foodydelivery.com/u/0/conversations', origin: 'https://app.foodydelivery.com' }, url: 'https://app.foodydelivery.com/api/v2/conversations/list?_=' + Date.now() },
+  ];
+  const out = [];
+  for (const v of variants) {
+    try {
+      const r = await fetch(v.url, { headers: v.headers });
+      const text = await r.text();
+      out.push({ label: v.label, status: r.status, body: text.slice(0, 300) });
+    } catch (e) { out.push({ label: v.label, error: e.message }); }
   }
+  res.json(out);
 });
 
 app.get('/config', (req, res) => {
