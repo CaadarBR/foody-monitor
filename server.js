@@ -288,8 +288,8 @@ function loadOnlineTimes() {
 
 loadOnlineTimes();
 
-function addAlert(type, msg, courierName = null) {
-  activeAlerts.unshift({ id: Date.now(), type, msg, time: new Date().toISOString(), courierName });
+function addAlert(type, msg, courierName = null, extra = {}) {
+  activeAlerts.unshift({ id: Date.now(), type, msg, time: new Date().toISOString(), courierName, ...extra });
   if (activeAlerts.length > 30) activeAlerts.pop();
   appendLog({ type: 'alert', alertType: type, msg });
   console.log(`[ALERTA] ${msg}`);
@@ -422,7 +422,8 @@ function processTracking(trackingList, ordersByCourierList) {
   for (const [id, cs] of courierMap) {
     if (!seenIds.has(id)) {
       appendLog({ type: 'status_change', courierName: cs.name, from: cs.status, to: 'missing' });
-      addAlert('missing', `${cs.name} sumiu do mapa!`, cs.name);
+      const coords = (cs.lat && cs.lng) ? { lat: cs.lat, lng: cs.lng } : {};
+      addAlert('missing', `${cs.name} sumiu do mapa!`, cs.name, coords);
       courierMap.delete(id);
     }
   }

@@ -126,6 +126,17 @@
     .alert-card.warn   { background: #3b1f0a; border: 1px solid rgba(249,115,22,0.5); }
     .alert-card.good   { background: #0a3b1f; border: 1px solid rgba(34,197,94,0.5); }
 
+    .coord-link {
+      font-size: 10px;
+      color: var(--muted);
+      text-decoration: none;
+      font-weight: 400;
+      opacity: 0.5;
+      margin-left: 6px;
+      white-space: nowrap;
+    }
+    .coord-link:hover { opacity: 1; text-decoration: underline; }
+
     .alert-icon  { font-size: 18px; margin-top: 1px; flex-shrink: 0; }
     .alert-body  { flex: 1; }
     .alert-msg   { font-size: 13px; font-weight: 600; line-height: 1.4; }
@@ -210,28 +221,6 @@
     .nudge-feedback { font-size: 13px; margin-top: 12px; min-height: 18px; font-weight: 600; }
     .nudge-feedback.ok  { color: var(--green); }
     .nudge-feedback.err { color: var(--red); }
-
-    .loc-link {
-      display: block;
-      margin-top: 10px;
-      padding: 8px;
-      text-align: center;
-      border-radius: 8px;
-      font-size: 12px;
-      font-weight: 600;
-      text-decoration: none;
-      color: var(--blue);
-      border: 1px solid rgba(59,130,246,0.35);
-      background: rgba(59,130,246,0.08);
-      transition: background 0.2s;
-    }
-    .loc-link:hover { background: rgba(59,130,246,0.18); }
-    .loc-link.loc-missing {
-      color: #fca5a5;
-      border-color: rgba(239,68,68,0.4);
-      background: rgba(239,68,68,0.1);
-    }
-    .loc-link.loc-missing:hover { background: rgba(239,68,68,0.2); }
 
     .timer-block { text-align: center; padding: 8px 0 4px; }
 
@@ -583,7 +572,7 @@
 <!-- ── Cutucar entregador Modal ── -->
 <div class="modal-overlay" id="nudgeModal">
   <div class="modal">
-    <div class="modal-title">📩 Cutucar <span id="nudgeName"></span></div>
+    <div class="modal-title">⚠️ Alertar <span id="nudgeName"></span></div>
     <div class="form-group">
       <label class="form-label">Mensagem (chega no app do entregador)</label>
       <textarea id="nudgeMessage" style="font-family:inherit;min-height:70px;">Tem pedido pronto para entrega.</textarea>
@@ -1116,7 +1105,7 @@ function alertCardHtml(a) {
     <div class="alert-card ${cls}">
       <span class="alert-icon">${icon}</span>
       <div class="alert-body">
-        <div class="alert-msg">${a.msg}</div>
+        <div class="alert-msg">${a.msg}${(a.lat && a.lng) ? ` <a class="coord-link" href="https://www.google.com/maps?q=${a.lat},${a.lng}" target="_blank" rel="noopener" title="Ver no mapa">${a.lat}, ${a.lng}</a>` : ''}</div>
         <div class="alert-time">${new Date(a.time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</div>
       </div>
       <button class="btn-dismiss" onclick="dismissAlert(${a.id})">✕</button>
@@ -1232,8 +1221,7 @@ function renderCouriers() {
           <span>online desde ${new Date(c.onlineAt || c.statusSince).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</span>
           <span>visto ${fmtRelative(c.lastSeen)}</span>
         </div>
-        ${(c.lat && c.lng) ? `<a class="loc-link ${c.status === 'missing' ? 'loc-missing' : ''}" href="https://www.google.com/maps?q=${c.lat},${c.lng}" target="_blank" rel="noopener">📍 ${c.status === 'missing' ? 'Última localização (sumiu aqui)' : 'Ver no mapa'}</a>` : ''}
-        <button class="nudge-btn" data-name="${c.name.replace(/"/g,'&quot;')}" onclick="openNudge(this)">📩 Cutucar entregador</button>
+        <button class="nudge-btn" data-name="${c.name.replace(/"/g,'&quot;')}" onclick="openNudge(this)">⚠️ Alerta entregador</button>
       </div>`;
   }).join('');
 }
