@@ -207,6 +207,25 @@ async function foodyFetch(url) {
   }
 }
 
+// POST no Foody (chat/ações). Usa a mesma sessão (cookie SESSION) do foodyFetch.
+async function foodyPost(url, body) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { ...foodyHeaders(), 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const text = await r.text();
+    if (!r.ok) throw new Error(`HTTP ${r.status}: ${text.slice(0, 200)}`);
+    return text ? JSON.parse(text) : {};
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // ── Estado do monitor ─────────────────────────────────────────────────────────
 
 const courierMap = new Map();
@@ -378,7 +397,8 @@ function processTracking(trackingList, ordersByCourierList) {
             cs.status = 'alert';
             if (!cs.alerted) {
               cs.alerted = true;
-              addAlert('slow', `${cs.name} terminou há ${Math.floor(elapsed)}min e tem pedido esperando!`, cs.name);
+              const ord = cs.lastOrderNumber ? `o #${cs.lastOrderNumber} ` : '';
+              addAlert('slow', `${cs.name} terminou ${ord}há ${Math.floor(elapsed)}min e tem pedido esperando!`, cs.name);
             }
           } else if (elapsed >= config.alertMinutes * 0.65) {
             if (cs.status !== 'alert') cs.status = 'warning';
@@ -537,6 +557,34 @@ app.post('/api/alerts/dismiss', (req, res) => {
   const { id } = req.body;
   activeAlerts = activeAlerts.filter(a => a.id !== id);
   res.json({ ok: true });
+});
+
+// Cutucar entregador: manda mensagem no chat interno do Foody (mesma sessão do monitor).
+// Fluxo: acha o courierUid pelo nome → cria/pega a conversa → envia a mensagem.
+app.post('/api/nudge', async (req, res) => {
+  const name    = (req.body.name    || '').trim();
+  const message = (req.body.message || '').trim();
+  if (!name || !message)  return res.status(400).json({ ok: false, error: 'Nome e mensagem são obrigatórios.' });
+  if (!config.cookie)     return res.status(400).json({ ok: false, error: 'Sessão do Foody não configurada.' });
+
+  const norm = s => (s || '').trim().toLowerCase();
+  try {
+    const list = await foodyFetch('https://app.foodydelivery.com/api/v2/conversations/couriers-for-conversation');
+    const couriers = list.couriers || [];
+    const match = couriers.find(c => norm(c.courierName) === norm(name))
+      || couriers.find(c => norm(c.courierName).startsWith(norm(name)) || norm(name).startsWith(norm(c.courierName)));
+    if (!match) return res.status(404).json({ ok: false, error: `Entregador "${name}" não encontrado no chat do Foody.` });
+
+    const conv = await foodyPost('https://app.foodydelivery.com/api/v2/conversations/create-or-get-conversation', { courierUid: match.courierUid });
+    if (!conv.conversationUid) throw new Error('Não consegui abrir a conversa.');
+
+    const sent = await foodyPost(`https://app.foodydelivery.com/api/v2/conversations/${conv.conversationUid}/send-message`, { body: message });
+    console.log(`[NUDGE] "${message}" → ${match.courierName}`);
+    res.json({ ok: true, courierName: match.courierName, messageUid: sent.messageUid });
+  } catch (e) {
+    console.error('[NUDGE]', e.message);
+    res.status(502).json({ ok: false, error: e.message });
+  }
 });
 
 app.get('/config', (req, res) => {

@@ -6,7 +6,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="theme-color" content="#0f172a">
-  <title>Foody Monitor</title>
+  <title>Monitor | Foody Delivery</title>
   <link rel="icon" href="https://links.varandaspizzaria.com/favicon.ico">
   <link rel="manifest" href="/manifest.json">
   <style>
@@ -183,6 +183,33 @@
     .badge-missing    { background: rgba(239,68,68,0.10);   color: #f87171; }
 
     .last-order { font-size: 10px; color: var(--muted); }
+
+    .nudge-btn {
+      width: 100%;
+      margin-top: 12px;
+      padding: 9px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.04);
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s, border-color 0.2s;
+    }
+    .nudge-btn:hover { background: rgba(255,255,255,0.1); border-color: var(--brand); }
+
+    .nudge-quick { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+    .nudge-quick button {
+      padding: 6px 11px; border-radius: 6px; border: 1px solid var(--border);
+      background: var(--bg); color: var(--muted); font-size: 11px; cursor: pointer;
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .nudge-quick button:hover { color: var(--text); border-color: var(--brand); }
+
+    .nudge-feedback { font-size: 13px; margin-top: 12px; min-height: 18px; font-weight: 600; }
+    .nudge-feedback.ok  { color: var(--green); }
+    .nudge-feedback.err { color: var(--red); }
 
     .timer-block { text-align: center; padding: 8px 0 4px; }
 
@@ -369,7 +396,7 @@
 <!-- ── Header ── -->
 <header class="header">
   <div style="display:flex;align-items:center;gap:8px;">
-    <span class="logo">🍕 Foody Monitor</span>
+    <span class="logo">Monitor | Foody Delivery</span>
     <span class="status-dot" id="statusDot"></span>
   </div>
   <div class="header-right">
@@ -531,7 +558,73 @@
   </div>
 </div>
 
+<!-- ── Cutucar entregador Modal ── -->
+<div class="modal-overlay" id="nudgeModal">
+  <div class="modal">
+    <div class="modal-title">📩 Cutucar <span id="nudgeName"></span></div>
+    <div class="form-group">
+      <label class="form-label">Mensagem (chega no app do entregador)</label>
+      <textarea id="nudgeMessage" style="font-family:inherit;min-height:70px;">Tem pedido pronto para entrega.</textarea>
+      <div class="nudge-quick">
+        <button type="button" onclick="setNudgeMsg('Tem pedido pronto para entrega.')">Pedido pronto</button>
+        <button type="button" onclick="setNudgeMsg('Pedido em atraso.')">Em atraso</button>
+        <button type="button" onclick="setNudgeMsg('Favor retornar à loja.')">Retornar</button>
+      </div>
+    </div>
+    <div id="nudgeFeedback" class="nudge-feedback"></div>
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="closeNudge()">Cancelar</button>
+      <button class="btn btn-primary" id="nudgeSendBtn" onclick="sendNudge()">Enviar</button>
+    </div>
+  </div>
+</div>
+
 <script>
+// ─── Cutucar entregador ───────────────────────────────────────────────────────
+let nudgeTarget = null;
+function openNudge(btn) {
+  nudgeTarget = btn.getAttribute('data-name');
+  document.getElementById('nudgeName').textContent = nudgeTarget;
+  document.getElementById('nudgeFeedback').textContent = '';
+  document.getElementById('nudgeFeedback').className = 'nudge-feedback';
+  document.getElementById('nudgeMessage').value = 'Tem pedido pronto para entrega.';
+  document.getElementById('nudgeModal').classList.add('open');
+}
+function closeNudge() {
+  document.getElementById('nudgeModal').classList.remove('open');
+  nudgeTarget = null;
+}
+function setNudgeMsg(m) { document.getElementById('nudgeMessage').value = m; }
+async function sendNudge() {
+  const message = document.getElementById('nudgeMessage').value.trim();
+  const fb  = document.getElementById('nudgeFeedback');
+  const btn = document.getElementById('nudgeSendBtn');
+  if (!message) { fb.textContent = 'Escreva uma mensagem.'; fb.className = 'nudge-feedback err'; return; }
+  btn.disabled = true; btn.textContent = 'Enviando...';
+  fb.textContent = ''; fb.className = 'nudge-feedback';
+  try {
+    const r = await fetch('/api/nudge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: nudgeTarget, message }),
+    });
+    const data = await r.json();
+    if (data.ok) {
+      fb.textContent = '✅ Enviado para ' + (data.courierName || nudgeTarget);
+      fb.className = 'nudge-feedback ok';
+      setTimeout(closeNudge, 1400);
+    } else {
+      fb.textContent = '❌ ' + (data.error || 'Falhou ao enviar.');
+      fb.className = 'nudge-feedback err';
+    }
+  } catch (e) {
+    fb.textContent = '❌ ' + e.message;
+    fb.className = 'nudge-feedback err';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Enviar';
+  }
+}
+
 // ─── Estado ───────────────────────────────────────────────────────────────────
 const couriers = new Map();
 let alerts           = [];
@@ -1106,7 +1199,7 @@ function renderCouriers() {
           </div>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
             <span class="badge ${cfg.badge}">${cfg.label}</span>
-            ${c.status === 'available' && c.lastOrderNumber ? `<span class="last-order">#${c.lastOrderNumber}</span>` : ''}
+            ${c.lastOrderNumber ? `<span class="last-order">último #${c.lastOrderNumber}</span>` : ''}
           </div>
         </div>
         <div class="timer-block">
@@ -1117,6 +1210,7 @@ function renderCouriers() {
           <span>online desde ${new Date(c.onlineAt || c.statusSince).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</span>
           <span>visto ${fmtRelative(c.lastSeen)}</span>
         </div>
+        <button class="nudge-btn" data-name="${c.name.replace(/"/g,'&quot;')}" onclick="openNudge(this)">📩 Cutucar entregador</button>
       </div>`;
   }).join('');
 }
