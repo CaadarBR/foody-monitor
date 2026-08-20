@@ -589,11 +589,12 @@
     <div class="modal-title">⚠️ Alertar <span id="nudgeName"></span></div>
     <div class="form-group">
       <label class="form-label">Mensagem (chega no app do entregador)</label>
-      <textarea id="nudgeMessage" style="font-family:inherit;min-height:70px;">Tem pedido pronto para entrega.</textarea>
+      <textarea id="nudgeMessage" style="font-family:inherit;min-height:70px;">Pedido pronto aguardando para entrega</textarea>
       <div class="nudge-quick">
-        <button type="button" onclick="setNudgeMsg('Tem pedido pronto para entrega.')">Pedido pronto</button>
-        <button type="button" onclick="setNudgeMsg('Pedido em atraso.')">Em atraso</button>
-        <button type="button" onclick="setNudgeMsg('Favor retornar à loja.')">Retornar</button>
+        <button type="button" onclick="setNudgeMsg('Pedido pronto aguardando para entrega')">Pedido pronto</button>
+        <button type="button" onclick="setNudgeMsg('Pedido em atraso')">Em atraso</button>
+        <button type="button" onclick="setNudgeMsg('Favor retornar à loja')">Retornar</button>
+        <button type="button" onclick="setNudgeMsg('App Desconectado')">App desconectado</button>
       </div>
     </div>
     <div id="nudgeFeedback" class="nudge-feedback"></div>
@@ -609,10 +610,11 @@
 let nudgeTarget = null;
 function openNudge(btn) {
   nudgeTarget = btn.getAttribute('data-name');
+  const def = btn.getAttribute('data-default') || 'Pedido pronto aguardando para entrega';
   document.getElementById('nudgeName').textContent = nudgeTarget;
   document.getElementById('nudgeFeedback').textContent = '';
   document.getElementById('nudgeFeedback').className = 'nudge-feedback';
-  document.getElementById('nudgeMessage').value = 'Tem pedido pronto para entrega.';
+  document.getElementById('nudgeMessage').value = def;
   document.getElementById('nudgeModal').classList.add('open');
 }
 function closeNudge() {
@@ -1120,7 +1122,7 @@ function alertCardHtml(a) {
       <span class="alert-icon">${icon}</span>
       <div class="alert-body">
         <div class="alert-msg">${a.msg}${(a.lat && a.lng) ? ` <a class="coord-link" href="https://www.google.com/maps?q=${a.lat},${a.lng}" target="_blank" rel="noopener" title="Abrir no Google Maps">${a.lat}, ${a.lng}</a>` : ''}</div>
-        <div class="alert-time">${new Date(a.time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}${a.type === 'slow' ? ` <button class="alert-nudge" data-name="${(a.courierName || '').replace(/"/g,'&quot;')}" onclick="openNudge(this)">⚠️ alertar entregador</button>` : ''}</div>
+        <div class="alert-time">${new Date(a.time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}${(a.type === 'slow' || a.type === 'missing') ? ` <button class="alert-nudge" data-name="${(a.courierName || '').replace(/"/g,'&quot;')}" data-default="${a.type === 'missing' ? 'App Desconectado' : 'Pedido pronto aguardando para entrega'}" onclick="openNudge(this)">⚠️ alertar entregador</button>` : ''}</div>
       </div>
       <button class="btn-dismiss" onclick="dismissAlert(${a.id})">✕</button>
     </div>`;
