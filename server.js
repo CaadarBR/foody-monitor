@@ -187,6 +187,7 @@ function foodyHeaders() {
     'pragma': 'no-cache',
     'referer': 'https://app.foodydelivery.com/u/0/home',
     'x-requested-with': 'XMLHttpRequest',
+    'authuser': '0', // obrigatório pra API v2 (chat/conversas) — sem ele dá 400
     'cookie': config.cookie,
     'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
   };
@@ -585,31 +586,6 @@ app.post('/api/nudge', async (req, res) => {
   } catch (e) {
     console.error('[NUDGE]', e.message);
     res.status(502).json({ ok: false, error: e.message });
-  }
-});
-
-// TEMP debug — inspecionar o que o Foody devolve em couriers-for-conversation
-app.get('/api/nudge-debug', async (req, res) => {
-  const base = {
-    'accept': 'application/json, text/plain, */*',
-    'accept-language': 'pt-BR,pt;q=0.9',
-    'x-requested-with': 'XMLHttpRequest',
-    'cookie': config.cookie,
-    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36',
-  };
-  // path=... escolhe o endpoint v2; qualquer h_<nome>=valor vira header extra
-  const path = req.query.path || '/api/v2/conversations/couriers-for-conversation';
-  const h = { ...base, referer: 'https://app.foodydelivery.com/u/0/conversations', origin: 'https://app.foodydelivery.com' };
-  for (const [k, v] of Object.entries(req.query)) {
-    if (k.startsWith('h_')) h[k.slice(2).replace(/_/g, '-')] = v;
-  }
-  const url = 'https://app.foodydelivery.com' + path + (path.includes('?') ? '' : '?_=' + Date.now());
-  try {
-    const r = await fetch(url, { headers: h });
-    const text = await r.text();
-    res.json({ url, sentHeaders: Object.keys(h), status: r.status, body: text.slice(0, 400) });
-  } catch (e) {
-    res.json({ url, error: e.message });
   }
 });
 
