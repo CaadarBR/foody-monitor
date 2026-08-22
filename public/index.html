@@ -515,6 +515,8 @@
       <select class="log-date-sel" id="logAlertTypeSel" onchange="setLogAlertType(this.value)">
         <option value="">Todos os tipos</option>
         <option value="slow">⚠️ Demora no retorno</option>
+        <option value="accept">⏳ Demora pra aceitar</option>
+        <option value="depart">⏳ Demora pra sair</option>
         <option value="missing">🚨 Sumiu do mapa</option>
         <option value="single">✅ Saiu com 1 pedido</option>
         <option value="cookie">🍪 Cookie expirado</option>
@@ -898,7 +900,7 @@ function renderLog() {
 
     if (e.type === 'alert') return `
       <div class="log-entry ${e.alertType === 'single' ? 'log-success' : 'log-danger'}">
-        <span class="log-time">${time}</span><span>${e.alertType === 'missing' ? '🚨' : e.alertType === 'cookie' ? '🍪' : e.alertType === 'single' ? '✅' : '⚠️'}</span>
+        <span class="log-time">${time}</span><span>${e.alertType === 'missing' ? '🚨' : e.alertType === 'cookie' ? '🍪' : e.alertType === 'single' ? '✅' : (e.alertType === 'accept' || e.alertType === 'depart') ? '⏳' : '⚠️'}</span>
         <span>${e.msg}</span>
       </div>`;
 
@@ -1150,15 +1152,24 @@ async function dismissAlert(id) {
   renderAlerts();
 }
 
+// Texto padrão da mensagem pro entregador, por tipo de alerta
+const NUDGE_DEFAULTS = {
+  slow:    'Pedido pronto aguardando para entrega',
+  missing: 'App Desconectado',
+  accept:  'Favor aceitar o pedido',
+  depart:  'Favor sair para entrega',
+};
+
 function alertCardHtml(a) {
   const cls  = a.type === 'missing' || a.type === 'cookie' ? 'danger' : a.type === 'single' || a.type === 'shiftEnd' ? 'good' : 'warn';
-  const icon = a.type === 'missing' ? '🚨' : a.type === 'cookie' ? '🍪' : a.type === 'single' ? '✅' : a.type === 'shiftEnd' ? '🌙' : '⚠️';
+  const icon = a.type === 'missing' ? '🚨' : a.type === 'cookie' ? '🍪' : a.type === 'single' ? '✅' : a.type === 'shiftEnd' ? '🌙' : (a.type === 'accept' || a.type === 'depart') ? '⏳' : '⚠️';
+  const nudgeDefault = NUDGE_DEFAULTS[a.type];
   return `
     <div class="alert-card ${cls}">
       <span class="alert-icon">${icon}</span>
       <div class="alert-body">
         <div class="alert-msg">${a.msg}${(a.lat && a.lng) ? ` <a class="coord-link" href="https://www.google.com/maps?q=${a.lat},${a.lng}" target="_blank" rel="noopener" title="Abrir no Google Maps">${a.lat}, ${a.lng}</a>` : ''}</div>
-        <div class="alert-time">${new Date(a.time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}${(a.type === 'slow' || a.type === 'missing') ? ` <button class="alert-nudge" data-name="${(a.courierName || '').replace(/"/g,'&quot;')}" data-default="${a.type === 'missing' ? 'App Desconectado' : 'Pedido pronto aguardando para entrega'}" onclick="openNudge(this)">⚠️ alertar entregador</button>` : ''}</div>
+        <div class="alert-time">${new Date(a.time).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}${nudgeDefault ? ` <button class="alert-nudge" data-name="${(a.courierName || '').replace(/"/g,'&quot;')}" data-default="${nudgeDefault}" onclick="openNudge(this)">⚠️ alertar entregador</button>` : ''}</div>
       </div>
       <button class="btn-dismiss" onclick="dismissAlert(${a.id})">✕</button>
     </div>`;

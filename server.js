@@ -238,6 +238,12 @@ let readyOrdersCount = 0;
 // dispara "tem pedido esperando" no instante que a pizza fica pronta (falso alarme).
 const READY_DELAY_MS = 10000;
 const readyOrderSince = new Map(); // uid do pedido pronto -> quando apareceu pronto
+
+// Alertas de demora do entregador com o pedido já na mão:
+//  - status 'dispatched' (recebeu, não aceitou) por +5min
+//  - status 'accepted'   (aceitou, não saiu)    por +5min
+const ACCEPT_DELAY_MS = 5 * 60 * 1000;
+const orderStageSince = new Map(); // uid -> { status, since, alerted, courier, num }
 let lastUpdated      = null;
 let sessionOk        = false;
 let pollRunning      = false;
@@ -305,6 +311,8 @@ function addAlert(type, msg, courierName = null, extra = {}) {
       : type === 'single'    ? '✅ Saiu com 1 entrega'
       : type === 'cookie'    ? '🍪 Cookie expirado!'
       : type === 'shiftEnd'  ? '🌙 Expediente encerrado'
+      : type === 'accept'    ? '⏳ Demora pra aceitar'
+      : type === 'depart'    ? '⏳ Demora pra sair'
       : '⚠️ Demora no retorno',
     body: msg,
     tag: `${type}-${courierName || Date.now()}`,
@@ -314,6 +322,36 @@ function addAlert(type, msg, courierName = null, extra = {}) {
 
 function orderNumberOf(o) {
   return o.orderNumber ?? o.number ?? o.code ?? o.orderCode ?? o.orderId ?? o.id ?? null;
+}
+
+// Vigia quanto tempo cada pedido fica "recebido mas não aceito" (dispatched) e
+// "aceito mas não saiu" (accepted). Passou de ACCEPT_DELAY_MS, alerta uma vez.
+function trackOrderStages(ordersByCourierList) {
+  const now  = Date.now();
+  const seen = new Set();
+  for (const co of ordersByCourierList || []) {
+    const courier = (co.courierName || '').trim();
+    for (const o of co.orders || []) {
+      const key = o.uid || o.id;
+      if (key == null) continue;
+      seen.add(key);
+      const prev = orderStageSince.get(key);
+      if (!prev || prev.status !== o.status) {
+        orderStageSince.set(key, { status: o.status, since: now, alerted: false, courier, num: orderNumberOf(o) });
+        continue;
+      }
+      if (!prev.alerted && now - prev.since >= ACCEPT_DELAY_MS) {
+        if (o.status === 'dispatched') {
+          addAlert('accept', `${courier} recebeu o #${prev.num} e não aceitou há +5min`, courier);
+          prev.alerted = true;
+        } else if (o.status === 'accepted') {
+          addAlert('depart', `${courier} aceitou o #${prev.num} mas não saiu há +5min`, courier);
+          prev.alerted = true;
+        }
+      }
+    }
+  }
+  for (const k of orderStageSince.keys()) if (!seen.has(k)) orderStageSince.delete(k);
 }
 
 function processTracking(trackingList, ordersByCourierList) {
@@ -482,6 +520,7 @@ async function doPoll() {
     }
     readyOrdersCount = readyList.filter(o => nowReady - readyOrderSince.get(o.uid || o.id) >= READY_DELAY_MS).length;
 
+    trackOrderStages(orders.ordersByCourier || []);
     processTracking(tracking.couriers, orders.ordersByCourier || []);
 
     const noActiveOrders = ![...courierMap.values()].some(c => c.activeOrderCount > 0);
