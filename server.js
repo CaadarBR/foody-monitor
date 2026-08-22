@@ -232,6 +232,12 @@ async function foodyPost(url, body) {
 const courierMap = new Map();
 let activeAlerts    = [];
 let readyOrdersCount = 0;
+
+// Delay pra um pedido "pronto" contar como "esperando": o sistema leva ~10s pra
+// despachar pra alguém, e o monitor (poll ~1s) é mais rápido que o Foody. Sem isso,
+// dispara "tem pedido esperando" no instante que a pizza fica pronta (falso alarme).
+const READY_DELAY_MS = 10000;
+const readyOrderSince = new Map(); // uid do pedido pronto -> quando apareceu pronto
 let lastUpdated      = null;
 let sessionOk        = false;
 let pollRunning      = false;
@@ -462,8 +468,19 @@ async function doPoll() {
       console.log('[INFO] Monitoramento iniciado com sucesso.');
     }
 
-    readyOrdersCount = (orders.pendingOrdersByCompany || [])
-      .filter(o => o.status === 'ready').length;
+    // Pedidos prontos e sem entregador. Só contam como "esperando" após READY_DELAY_MS
+    // pronto — dá tempo do sistema despachar pra alguém antes de alertar.
+    const nowReady   = Date.now();
+    const readyList  = (orders.pendingOrdersByCompany || []).filter(o => o.status === 'ready');
+    const readyKeys  = new Set(readyList.map(o => o.uid || o.id));
+    for (const o of readyList) {
+      const k = o.uid || o.id;
+      if (!readyOrderSince.has(k)) readyOrderSince.set(k, nowReady);
+    }
+    for (const k of readyOrderSince.keys()) {
+      if (!readyKeys.has(k)) readyOrderSince.delete(k); // saiu de "pronto" (despachado/cancelado)
+    }
+    readyOrdersCount = readyList.filter(o => nowReady - readyOrderSince.get(o.uid || o.id) >= READY_DELAY_MS).length;
 
     processTracking(tracking.couriers, orders.ordersByCourier || []);
 
@@ -587,6 +604,17 @@ app.post('/api/nudge', async (req, res) => {
     console.error('[NUDGE]', e.message);
     res.status(502).json({ ok: false, error: e.message });
   }
+});
+
+// TEMP probe — ver o ciclo de status dos pedidos ao vivo (pra calibrar os alertas)
+app.get('/api/orders-debug', async (req, res) => {
+  try {
+    const orders = await foodyFetch('https://app.foodydelivery.com/api/order/listbycourier');
+    const byCourier = (orders.ordersByCourier || []).flatMap(co =>
+      (co.orders || []).map(o => ({ courier: co.courierName, id: o.id, uid: o.uid, status: o.status, date: o.date, due: o.deliveryDueDate })));
+    const pending = (orders.pendingOrdersByCompany || []).map(o => ({ id: o.id, status: o.status, customer: o.customerName }));
+    res.json({ byCourier, pending });
+  } catch (e) { res.json({ error: e.message }); }
 });
 
 app.get('/config', (req, res) => {
