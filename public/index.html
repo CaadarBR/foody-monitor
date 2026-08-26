@@ -89,6 +89,7 @@
     .banner-blue { background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.3); }
     .banner-orange { background: rgba(249,115,22,0.12); border: 1px solid rgba(249,115,22,0.35); }
     .nogps { color: #eab308; font-weight: 600; }
+    .gps-null { color: #eab308; font-size: 10px; font-weight: 700; opacity: 0.8; margin-left: 4px; }
     .parked-line { margin-top: 6px; font-size: 12px; font-weight: 700; color: #f97316; font-variant-numeric: tabular-nums; text-align: center; }
     .banner-red  { background: rgba(239,68,68,0.12);  border: 1px solid rgba(239,68,68,0.4); }
 
@@ -1260,7 +1261,7 @@ function alertCardHtml(a) {
     <div class="alert-card ${cls}">
       <span class="alert-icon">${icon}</span>
       <div class="alert-body">
-        <div class="alert-msg">${a.msg}${(a.lat && a.lng) ? ` <a class="coord-link" href="https://www.google.com/maps?q=${a.lat},${a.lng}" target="_blank" rel="noopener" title="Abrir no Google Maps">${a.lat}, ${a.lng}</a>` : ''}</div>
+        <div class="alert-msg">${a.msg}${(a.lat && a.lng) ? ` <a class="coord-link" href="https://www.google.com/maps?q=${a.lat},${a.lng}" target="_blank" rel="noopener" title="Abrir no Google Maps">${a.lat}, ${a.lng}</a>` : ''}${a.gpsNull ? ` <span class="gps-null" title="GPS não estava vivo (posição pode estar desatualizada)">null</span>` : ''}</div>
         <div class="alert-time">${fmtAlertTime(a.time)}${nudgeDefault ? ` <button class="alert-nudge" data-name="${(a.courierName || '').replace(/"/g,'&quot;')}" data-default="${nudgeDefault}" onclick="openNudge(this)">⚠️ alertar entregador</button>` : ''}</div>
       </div>
       ${a.stageSince ? alertTimerHtml(a) : ''}
