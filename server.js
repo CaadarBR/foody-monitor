@@ -635,15 +635,26 @@ function processTracking(trackingList, ordersByCourierList) {
     cs.missCount = (cs.missCount || 0) + 1;
     if (cs.missCount < 2) continue; // ainda pode ser só um flicker — espera o próximo poll
 
-    const coords = (cs.lat && cs.lng) ? { lat: cs.lat, lng: cs.lng } : {};
+    // Coords: última válida; se faltar, cai pra referência do "parado" (nunca sumir sem posição)
+    const clat2 = (typeof cs.lat === 'number') ? cs.lat : (typeof cs.stLat === 'number' ? cs.stLat : null);
+    const clng2 = (typeof cs.lng === 'number') ? cs.lng : (typeof cs.stLng === 'number' ? cs.stLng : null);
+    const coords = (clat2 != null && clng2 != null) ? { lat: clat2, lng: clng2 } : {};
     const held   = cs.heldOrders || [];
-    // Contexto pra distinguir (com o tempo, pelo padrão) queda de conexão x desconexão seca:
-    // há quanto tempo o GPS já tinha parado ANTES de cair. Gradual (>=90s) = provável conexão/
-    // celular parado; seco = tava fresco e cortou. Registramos tudo — a malícia aparece na reincidência.
-    const gpsGapSec = cs.lastGpsAt ? Math.round((cs.lastSeen - cs.lastGpsAt) / 1000) : null;
-    const gradual   = gpsGapSec != null && gpsGapSec >= 90;
-    const nota      = gradual ? ' (conexão já oscilava)' : '';
-    const ctx = { lat: cs.lat ?? null, lng: cs.lng ?? null, gpsGapSec, gradual, hadOrder: held.length > 0, orders: held.map(h => h.num) };
+
+    // Por que sumiu? Sinais pra distinguir (pelo padrão) app dormindo/conexão x desconexão seca:
+    //  - estava PARADO antes de cair (celular quieto → app dorme) = quase certo que NÃO foi malícia
+    //  - GPS já tinha parado >=90s antes (conexão oscilando)
+    // Registramos tudo — a malícia aparece na reincidência, não num evento.
+    const gpsGapSec     = cs.lastGpsAt ? Math.round((cs.lastSeen - cs.lastGpsAt) / 1000) : null;
+    const gradual       = gpsGapSec != null && gpsGapSec >= 90;
+    const stillFor      = cs.stSince ? (cs.lastSeen - cs.stSince) : 0; // há quanto tempo no mesmo ponto
+    const wasStationary = !!cs.stAlerted || stillFor >= STATIONARY_MS; // parado ≥10min = app dormiu (benigno)
+    const wasMoving     = !wasStationary && !gradual && stillFor < 120000; // moveu <2min atrás + GPS fresco = tava ativo
+    const nota = wasStationary ? ' (estava parado — provável app dormindo)'
+               : gradual       ? ' (conexão já oscilava)'
+               : wasMoving     ? ' (estava em movimento)'
+               : '';
+    const ctx = { lat: clat2, lng: clng2, gpsGapSec, gradual, wasStationary, wasMoving, hadOrder: held.length > 0, orders: held.map(h => h.num) };
 
     if (held.length > 0) {
       const nums = held.map(h => `#${h.num}`).join(', ');
@@ -651,7 +662,7 @@ function processTracking(trackingList, ordersByCourierList) {
       addAlert('dropped', `${cs.name} desconectou com ${held.length > 1 ? 'os pedidos' : 'o'} ${nums}${nota}`, cs.name, { ...coords, ...ctx });
     } else {
       appendLog({ type: 'status_change', courierName: cs.name, from: cs.status, to: 'missing', ...ctx });
-      addAlert('missing', gradual ? `${cs.name} sumiu do mapa${nota}` : `${cs.name} sumiu do mapa!`, cs.name, { ...coords, ...ctx });
+      addAlert('missing', nota ? `${cs.name} sumiu do mapa${nota}` : `${cs.name} sumiu do mapa!`, cs.name, { ...coords, ...ctx });
     }
     courierMap.delete(id);
   }
