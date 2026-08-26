@@ -999,6 +999,18 @@ app.post('/api/track', (req, res) => {
 app.get('/api/log', (req, res) => {
   if (!hasDataAccess(req)) return res.status(401).json({ date: null, logs: [] });
   const date = req.query.date || operationalDate();
+  // "all" = junta TODOS os dias, em ordem cronológica (pra caçar reincidente no histórico)
+  if (date === 'all') {
+    try {
+      const files = fs.readdirSync(LOGS_DIR)
+        .filter(f => /^\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort();
+      let logs = [];
+      for (const f of files) {
+        try { logs = logs.concat(JSON.parse(fs.readFileSync(path.join(LOGS_DIR, f), 'utf8'))); } catch (e) {}
+      }
+      return res.json({ date: 'all', logs });
+    } catch (e) { return res.json({ date: 'all', logs: [] }); }
+  }
   const file = path.join(LOGS_DIR, `${date}.json`);
   try {
     res.json({ date, logs: JSON.parse(fs.readFileSync(file, 'utf8')) });

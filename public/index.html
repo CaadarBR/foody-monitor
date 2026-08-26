@@ -885,8 +885,8 @@ async function loadLogDates() {
       document.getElementById('logEntries').innerHTML = '<div class="log-empty">Nenhum registro ainda.</div>';
       return;
     }
-    sel.innerHTML = dates.map(d => `<option value="${d}">${fmtDateBR(d)}</option>`).join('');
-    await loadLog(dates[0]);
+    sel.innerHTML = '<option value="all">📅 Todos os dias</option>' + dates.map(d => `<option value="${d}">${fmtDateBR(d)}</option>`).join('');
+    await loadLog(dates[0]); // abre no dia mais recente (não carrega tudo à toa)
   } catch (e) {}
 }
 
@@ -945,7 +945,10 @@ function renderLog() {
   const cls   = { delivering: 'log-info', available: 'log-success', warning: 'log-warn', alert: 'log-danger', missing: 'log-danger', dropped: 'log-danger' };
 
   container.innerHTML = [...filtered].reverse().map(e => {
-    const time = new Date(e.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const _d = new Date(e.timestamp);
+    const time = (currentLogDate === 'all')
+      ? _d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ' ' + _d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      : _d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
     if (e.type === 'session_start') return `
       <div class="log-entry log-session">
