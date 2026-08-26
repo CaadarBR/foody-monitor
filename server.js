@@ -544,6 +544,8 @@ function processTracking(trackingList, ordersByCourierList) {
         missCount: 0,
         heldOrders: activeOrders.map(o => ({ num: orderNumberOf(o), status: o.status })),
         stLat: tc.latitute ?? null, stLng: tc.longitude ?? null, stSince: now, stAlerted: false, stAlertId: null,
+        lastGpsAt: (typeof tc.latitute === 'number') ? now : null,
+        noGps: typeof tc.latitute !== 'number',
       });
       continue;
     }
@@ -553,8 +555,9 @@ function processTracking(trackingList, ordersByCourierList) {
     cs.lastSeen = now;
     // Só sobrescreve a posição se vier válida — preserva a ÚLTIMA localização boa
     // (senão um poll com GPS null apaga a posição e o "sumiu do mapa" fica sem coords).
-    if (typeof tc.latitute === 'number')  cs.lat = tc.latitute;
-    if (typeof tc.longitude === 'number') cs.lng = tc.longitude;
+    const hasGps = typeof tc.latitute === 'number' && typeof tc.longitude === 'number';
+    if (hasGps) { cs.lat = tc.latitute; cs.lng = tc.longitude; cs.lastGpsAt = now; }
+    cs.noGps = !hasGps; // presente no rastreamento mas sem mandar posição (celular parado/sinal fraco)
     cs.activeOrderCount = activeOrders.length;
 
     // Permanência no mesmo local: se ficar >10min sem sair >80m do ponto (e longe da loja), alerta.
@@ -634,14 +637,21 @@ function processTracking(trackingList, ordersByCourierList) {
 
     const coords = (cs.lat && cs.lng) ? { lat: cs.lat, lng: cs.lng } : {};
     const held   = cs.heldOrders || [];
+    // Contexto pra distinguir (com o tempo, pelo padrão) queda de conexão x desconexão seca:
+    // há quanto tempo o GPS já tinha parado ANTES de cair. Gradual (>=90s) = provável conexão/
+    // celular parado; seco = tava fresco e cortou. Registramos tudo — a malícia aparece na reincidência.
+    const gpsGapSec = cs.lastGpsAt ? Math.round((cs.lastSeen - cs.lastGpsAt) / 1000) : null;
+    const gradual   = gpsGapSec != null && gpsGapSec >= 90;
+    const nota      = gradual ? ' (conexão já oscilava)' : '';
+    const ctx = { lat: cs.lat ?? null, lng: cs.lng ?? null, gpsGapSec, gradual, hadOrder: held.length > 0, orders: held.map(h => h.num) };
+
     if (held.length > 0) {
-      // Desconectou tendo pedido na mão — texto factual e neutro (a tela fica à vista de todos)
       const nums = held.map(h => `#${h.num}`).join(', ');
-      appendLog({ type: 'status_change', courierName: cs.name, from: cs.status, to: 'dropped' });
-      addAlert('dropped', `${cs.name} desconectou com ${held.length > 1 ? 'os pedidos' : 'o'} ${nums}`, cs.name, coords);
+      appendLog({ type: 'status_change', courierName: cs.name, from: cs.status, to: 'dropped', ...ctx });
+      addAlert('dropped', `${cs.name} desconectou com ${held.length > 1 ? 'os pedidos' : 'o'} ${nums}${nota}`, cs.name, { ...coords, ...ctx });
     } else {
-      appendLog({ type: 'status_change', courierName: cs.name, from: cs.status, to: 'missing' });
-      addAlert('missing', `${cs.name} sumiu do mapa!`, cs.name, coords);
+      appendLog({ type: 'status_change', courierName: cs.name, from: cs.status, to: 'missing', ...ctx });
+      addAlert('missing', gradual ? `${cs.name} sumiu do mapa${nota}` : `${cs.name} sumiu do mapa!`, cs.name, { ...coords, ...ctx });
     }
     courierMap.delete(id);
   }
