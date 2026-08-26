@@ -650,9 +650,10 @@ function processTracking(trackingList, ordersByCourierList) {
     const stillFor      = cs.stSince ? (cs.lastSeen - cs.stSince) : 0; // há quanto tempo no mesmo ponto
     const wasStationary = !!cs.stAlerted || stillFor >= STATIONARY_MS; // parado ≥10min = app dormiu (benigno)
     const wasMoving     = !wasStationary && !gradual && stillFor < 120000; // moveu <2min atrás + GPS fresco = tava ativo
+    // Só notas que INOCENTAM (parado/conexão). Caso não-claro = "sumiu do mapa!" limpo,
+    // sem adjetivo (a tela fica à vista de todos). wasMoving continua registrado no log, não na tela.
     const nota = wasStationary ? ' (estava parado — provável app dormindo)'
                : gradual       ? ' (conexão já oscilava)'
-               : wasMoving     ? ' (estava em movimento)'
                : '';
     const ctx = { lat: clat2, lng: clng2, gpsGapSec, gradual, wasStationary, wasMoving, hadOrder: held.length > 0, orders: held.map(h => h.num) };
 
