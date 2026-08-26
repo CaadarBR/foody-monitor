@@ -329,6 +329,7 @@ let hasLoggedStart   = false;
 let currentOpDate    = operationalDate();
 let shiftIdle         = false; // true quando não há mais pedido pronto/em rota e ninguém ativo (encerrado)
 let shiftClosing      = false; // true quando a loja fechou e não há mais nada pra distribuir (encerrando)
+let shiftEndAlertedDate = null; // opDate em que já disparei "Expediente encerrado" (1x por turno)
 
 let lastCookieAlertAt = 0;
 let consecutiveFailures = 0;
@@ -342,6 +343,9 @@ function saveState() {
       couriers:        [...courierMap.entries()],
       activeAlerts,
       readyOrdersCount,
+      shiftIdle,
+      shiftClosing,
+      shiftEndAlertedDate,
       savedAt:         Date.now(),
     }));
   } catch (e) {}
@@ -357,6 +361,16 @@ function loadState() {
     for (const [id, cs] of raw.couriers) courierMap.set(id, cs);
     activeAlerts     = raw.activeAlerts     || [];
     readyOrdersCount = raw.readyOrdersCount || 0;
+    shiftIdle        = !!raw.shiftIdle;    // não re-dispara "Expediente encerrado" a cada restart
+    shiftClosing     = !!raw.shiftClosing;
+    shiftEndAlertedDate = raw.shiftEndAlertedDate || null;
+    // Limpa duplicatas de "Expediente encerrado" (bug antigo de restart) — mantém só a mais nova
+    const shiftEnds = activeAlerts.filter(a => a.type === 'shiftEnd');
+    if (shiftEnds.length > 1) {
+      const keep = shiftEnds[0]; // activeAlerts é mais-novo-primeiro
+      activeAlerts = activeAlerts.filter(a => a.type !== 'shiftEnd' || a === keep);
+    }
+    if (shiftEnds.length > 0 && !shiftEndAlertedDate) shiftEndAlertedDate = operationalDate();
     console.log(`[INFO] Estado restaurado: ${courierMap.size} entregadores, ${activeAlerts.length} alertas.`);
   } catch (e) {}
 }
@@ -537,8 +551,10 @@ function processTracking(trackingList, ordersByCourierList) {
     const cs = courierMap.get(id);
     const prev = cs.status;
     cs.lastSeen = now;
-    cs.lat = tc.latitute;
-    cs.lng = tc.longitude;
+    // Só sobrescreve a posição se vier válida — preserva a ÚLTIMA localização boa
+    // (senão um poll com GPS null apaga a posição e o "sumiu do mapa" fica sem coords).
+    if (typeof tc.latitute === 'number')  cs.lat = tc.latitute;
+    if (typeof tc.longitude === 'number') cs.lng = tc.longitude;
     cs.activeOrderCount = activeOrders.length;
 
     // Permanência no mesmo local: se ficar >10min sem sair >80m do ponto (e longe da loja), alerta.
@@ -695,7 +711,9 @@ async function doPoll() {
     shiftClosing = storeClosed && nothingToDispatch;
     // Encerrado: além do acima, ninguém mais com pedido ativo (todos já terminaram/saíram).
     const idleNow = shiftClosing && noActiveOrders;
-    if (idleNow && !shiftIdle) {
+    // Avisa "encerrado" só 1x por turno (não repete por restart nem por oscilação do quadro).
+    if (idleNow && shiftEndAlertedDate !== currentOpDate) {
+      shiftEndAlertedDate = currentOpDate;
       addAlert('shiftEnd', 'Expediente encerrado — sem pedidos pendentes.');
     }
     shiftIdle = idleNow;
