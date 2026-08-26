@@ -192,15 +192,12 @@
       flex-shrink: 0;
       align-self: center;
       font-variant-numeric: tabular-nums;
-      font-weight: 700;
-      font-size: 15px;
-      padding: 3px 9px;
-      border-radius: 7px;
-      letter-spacing: 0.5px;
+      font-weight: 600;
+      font-size: 13px;
       white-space: nowrap;
     }
-    .alert-timer.running { color: #f97316; background: rgba(249,115,22,0.14); animation: pulseTimer 1.2s ease-in-out infinite; }
-    .alert-timer.done    { color: #22c55e; background: rgba(34,197,94,0.14); }
+    .alert-timer.running { color: #f97316; }
+    .alert-timer.done    { color: #f97316; opacity: 0.6; }
     @keyframes pulseTimer { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
 
     .btn-dismiss {
@@ -1232,14 +1229,14 @@ function fmtAlertTime(iso) {
 function alertTimerHtml(a) {
   const running = !a.resolvedAt;
   const ms      = (a.resolvedAt || Date.now()) - a.stageSince;
-  return `<span class="alert-timer ${running ? 'running' : 'done'}" data-since="${a.stageSince}"${a.resolvedAt ? ` data-resolved="${a.resolvedAt}"` : ''}>${running ? '⏱ ' : '✓ '}${fmtDuration(ms)}</span>`;
+  return `<span class="alert-timer ${running ? 'running' : 'done'}" data-since="${a.stageSince}"${a.resolvedAt ? ` data-resolved="${a.resolvedAt}"` : ''}>⏱️${fmtDuration(ms)}</span>`;
 }
 
 function updateAlertTimers() {
   document.querySelectorAll('.alert-timer[data-since]').forEach(el => {
     if (el.dataset.resolved) return; // já congelado
     const ms = Date.now() - Number(el.dataset.since);
-    el.textContent = '⏱ ' + fmtDuration(ms);
+    el.textContent = '⏱️' + fmtDuration(ms);
   });
 }
 
