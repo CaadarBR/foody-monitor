@@ -207,6 +207,25 @@ function isStoreOpenNowBRT() {
   });
 }
 
+// ── Permanência no mesmo local ─────────────────────────────────────────────────
+const STATIONARY_MS    = 10 * 60 * 1000; // parado por +10min
+const MOVE_THRESHOLD_M = 80;             // moveu se saiu >80m do ponto (tolera jitter de GPS)
+const STORE_RADIUS_M   = 150;            // dentro disso = na loja → parado ali é normal, não alerta
+
+function haversineM(lat1, lng1, lat2, lng2) {
+  const R = 6371000, toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+function storeCoords() {
+  const a = merchantCache && merchantCache.address;
+  if (!a) return null;
+  const lat = parseFloat(a.latitude), lng = parseFloat(a.longitude);
+  return (isFinite(lat) && isFinite(lng)) ? { lat, lng } : null;
+}
+
 function appendLog(entry) {
   const date = operationalDate();
   const file = path.join(LOGS_DIR, `${date}.json`);
@@ -372,6 +391,7 @@ function addAlert(type, msg, courierName = null, extra = {}) {
     title: type === 'missing' ? '🚨 Sumiu do mapa!'
       : type === 'dropped'   ? '🚨 Desconectou com pedido'
       : type === 'reassigned'? '🔁 Pedido reatribuído'
+      : type === 'stationary'? '⏸️ Parado no mesmo local'
       : type === 'single'    ? '✅ Saiu com 1 entrega'
       : type === 'cookie'    ? '🍪 Cookie expirado!'
       : type === 'shiftEnd'  ? '🌙 Expediente encerrado'
@@ -509,6 +529,7 @@ function processTracking(trackingList, ordersByCourierList) {
         alerted: false,
         missCount: 0,
         heldOrders: activeOrders.map(o => ({ num: orderNumberOf(o), status: o.status })),
+        stLat: tc.latitute ?? null, stLng: tc.longitude ?? null, stSince: now, stAlerted: false, stAlertId: null,
       });
       continue;
     }
@@ -519,6 +540,26 @@ function processTracking(trackingList, ordersByCourierList) {
     cs.lat = tc.latitute;
     cs.lng = tc.longitude;
     cs.activeOrderCount = activeOrders.length;
+
+    // Permanência no mesmo local: se ficar >10min sem sair >80m do ponto (e longe da loja), alerta.
+    const clat = tc.latitute, clng = tc.longitude;
+    if (typeof clat === 'number' && typeof clng === 'number') {
+      if (cs.stLat == null || haversineM(clat, clng, cs.stLat, cs.stLng) > MOVE_THRESHOLD_M) {
+        // andou → congela o cronômetro do alerta anterior (se havia) e reinicia a contagem
+        if (cs.stAlerted && cs.stAlertId) {
+          const al = activeAlerts.find(a => a.id === cs.stAlertId);
+          if (al && !al.resolvedAt) al.resolvedAt = now;
+        }
+        cs.stLat = clat; cs.stLng = clng; cs.stSince = now; cs.stAlerted = false; cs.stAlertId = null;
+      } else if (!cs.stAlerted && now - cs.stSince >= STATIONARY_MS) {
+        const sc = storeCoords();
+        const atStore = sc && haversineM(clat, clng, sc.lat, sc.lng) < STORE_RADIUS_M;
+        if (!atStore) {
+          const al = addAlert('stationary', `${cs.name} parado no mesmo local há 10min`, cs.name, { lat: clat, lng: clng, stageSince: cs.stSince });
+          cs.stAlerted = true; cs.stAlertId = al.id;
+        }
+      }
+    }
     cs.missCount = 0; // reapareceu → zera o contador de flicker
     // Guarda o que ele tem na mão AGORA (pra saber, se sumir, se largou pedido)
     cs.heldOrders = activeOrders.map(o => ({ num: orderNumberOf(o), status: o.status }));

@@ -574,6 +574,7 @@
         <option value="missing">🚨 Sumiu do mapa</option>
         <option value="dropped">🚨 Desconectou com pedido</option>
         <option value="reassigned">🔁 Pedido reatribuído</option>
+        <option value="stationary">⏸️ Parado no mesmo local</option>
         <option value="single">✅ Saiu com 1 pedido</option>
         <option value="cookie">🍪 Cookie expirado</option>
         <option value="shiftEnd">🌙 Expediente encerrado</option>
@@ -963,7 +964,7 @@ function renderLog() {
 
     if (e.type === 'alert') return `
       <div class="log-entry ${e.alertType === 'single' ? 'log-success' : 'log-danger'}">
-        <span class="log-time">${time}</span><span>${e.alertType === 'missing' ? '🚨' : e.alertType === 'dropped' ? '🚨' : e.alertType === 'reassigned' ? '🔁' : e.alertType === 'cookie' ? '🍪' : e.alertType === 'single' ? '✅' : (e.alertType === 'accept' || e.alertType === 'depart') ? '⏳' : '⚠️'}</span>
+        <span class="log-time">${time}</span><span>${e.alertType === 'missing' ? '🚨' : e.alertType === 'dropped' ? '🚨' : e.alertType === 'reassigned' ? '🔁' : e.alertType === 'stationary' ? '⏸️' : e.alertType === 'cookie' ? '🍪' : e.alertType === 'single' ? '✅' : (e.alertType === 'accept' || e.alertType === 'depart') ? '⏳' : '⚠️'}</span>
         <span>${e.msg}</span>
       </div>`;
 
@@ -1251,7 +1252,7 @@ function updateAlertTimers() {
 
 function alertCardHtml(a) {
   const cls  = a.type === 'missing' || a.type === 'dropped' || a.type === 'cookie' ? 'danger' : a.type === 'single' || a.type === 'shiftEnd' ? 'good' : 'warn';
-  const icon = a.type === 'missing' ? '🚨' : a.type === 'dropped' ? '🚨' : a.type === 'reassigned' ? '🔁' : a.type === 'cookie' ? '🍪' : a.type === 'single' ? '✅' : a.type === 'shiftEnd' ? '🌙' : (a.type === 'accept' || a.type === 'depart') ? '⏳' : '⚠️';
+  const icon = a.type === 'missing' ? '🚨' : a.type === 'dropped' ? '🚨' : a.type === 'reassigned' ? '🔁' : a.type === 'stationary' ? '⏸️' : a.type === 'cookie' ? '🍪' : a.type === 'single' ? '✅' : a.type === 'shiftEnd' ? '🌙' : (a.type === 'accept' || a.type === 'depart') ? '⏳' : '⚠️';
   const nudgeDefault = NUDGE_DEFAULTS[a.type];
   return `
     <div class="alert-card ${cls}">
