@@ -262,6 +262,8 @@ const readyOrderSince = new Map(); // uid do pedido pronto -> quando apareceu pr
 //  - status 'accepted'   (aceitou, não saiu)    por +5min
 const ACCEPT_DELAY_MS = 5 * 60 * 1000;
 const orderStageSince = new Map(); // uid -> { status, since, alerted, courier, num }
+const orderHolder = new Map();      // uid -> { courier, num, ts } — quem estava com o pedido (pra detectar reatribuição)
+const REASSIGN_TTL = 45 * 60 * 1000;
 let lastUpdated      = null;
 let sessionOk        = false;
 let pollRunning      = false;
@@ -328,6 +330,8 @@ function addAlert(type, msg, courierName = null, extra = {}) {
   console.log(`[ALERTA] ${msg}`);
   sendPush({
     title: type === 'missing' ? '🚨 Sumiu do mapa!'
+      : type === 'dropped'   ? '🚨 Desconectou com pedido'
+      : type === 'reassigned'? '🔁 Pedido reatribuído'
       : type === 'single'    ? '✅ Saiu com 1 entrega'
       : type === 'cookie'    ? '🍪 Cookie expirado!'
       : type === 'shiftEnd'  ? '🌙 Expediente encerrado'
@@ -388,6 +392,28 @@ function trackOrderStages(ordersByCourierList) {
   }
 }
 
+// Detecta quando um pedido TROCA de entregador (reatribuição). É à prova de flicker:
+// mesmo que o entregador pisque offline por 3s, se o pedido saiu do nome dele e caiu
+// no de outro, isso fica registrado — não depende de "pegar ele desconectado".
+// NÃO limpa por ausência (o pedido pode ir pra pendente e voltar) — expira por tempo.
+function trackReassignments(ordersByCourierList, now) {
+  for (const co of ordersByCourierList || []) {
+    const courier = (co.courierName || '').trim();
+    if (!courier) continue;
+    for (const o of co.orders || []) {
+      const uid = o.uid || o.id;
+      if (uid == null) continue;
+      const prev = orderHolder.get(uid);
+      if (prev && prev.courier && prev.courier !== courier) {
+        // texto factual e neutro — a tela fica à vista de todos
+        addAlert('reassigned', `#${orderNumberOf(o)} reatribuído: ${prev.courier} → ${courier}`, courier);
+      }
+      orderHolder.set(uid, { courier, num: orderNumberOf(o), ts: now });
+    }
+  }
+  for (const [uid, v] of orderHolder) if (now - v.ts > REASSIGN_TTL) orderHolder.delete(uid);
+}
+
 function processTracking(trackingList, ordersByCourierList) {
   const now        = Date.now();
   const shiftStart = operationalDayStartMs();
@@ -441,6 +467,8 @@ function processTracking(trackingList, ordersByCourierList) {
         statusSince: finishedAt || onlineAt,
         onlineAt,
         alerted: false,
+        missCount: 0,
+        heldOrders: activeOrders.map(o => ({ num: orderNumberOf(o), status: o.status })),
       });
       continue;
     }
@@ -451,6 +479,9 @@ function processTracking(trackingList, ordersByCourierList) {
     cs.lat = tc.latitute;
     cs.lng = tc.longitude;
     cs.activeOrderCount = activeOrders.length;
+    cs.missCount = 0; // reapareceu → zera o contador de flicker
+    // Guarda o que ele tem na mão AGORA (pra saber, se sumir, se largou pedido)
+    cs.heldOrders = activeOrders.map(o => ({ num: orderNumberOf(o), status: o.status }));
     if (lastOrderNumber != null) cs.lastOrderNumber = lastOrderNumber;
 
     if (activeOrders.length > 0) {
@@ -496,15 +527,26 @@ function processTracking(trackingList, ordersByCourierList) {
     }
   }
 
-  // Detecta quem sumiu do mapa — avisa uma vez e tira o card da tela
-  // (se ele reconectar depois, volta como um novo card, sem ficar preso mostrando timer).
+  // Detecta quem sumiu do mapa. Com DEBOUNCE: os entregadores desconectam e
+  // reconectam rapidinho — só confirma o sumiço após 2 polls seguidos fora (~20s),
+  // pra flicker rápido não virar card/alerta falso. Se reconectar antes, missCount zera.
   for (const [id, cs] of courierMap) {
-    if (!seenIds.has(id)) {
+    if (seenIds.has(id)) continue;
+    cs.missCount = (cs.missCount || 0) + 1;
+    if (cs.missCount < 2) continue; // ainda pode ser só um flicker — espera o próximo poll
+
+    const coords = (cs.lat && cs.lng) ? { lat: cs.lat, lng: cs.lng } : {};
+    const held   = cs.heldOrders || [];
+    if (held.length > 0) {
+      // Desconectou tendo pedido na mão — texto factual e neutro (a tela fica à vista de todos)
+      const nums = held.map(h => `#${h.num}`).join(', ');
+      appendLog({ type: 'status_change', courierName: cs.name, from: cs.status, to: 'dropped' });
+      addAlert('dropped', `${cs.name} desconectou com ${held.length > 1 ? 'os pedidos' : 'o'} ${nums}`, cs.name, coords);
+    } else {
       appendLog({ type: 'status_change', courierName: cs.name, from: cs.status, to: 'missing' });
-      const coords = (cs.lat && cs.lng) ? { lat: cs.lat, lng: cs.lng } : {};
       addAlert('missing', `${cs.name} sumiu do mapa!`, cs.name, coords);
-      courierMap.delete(id);
     }
+    courierMap.delete(id);
   }
 }
 
@@ -555,6 +597,7 @@ async function doPoll() {
     readyOrdersCount = readyList.filter(o => nowReady - readyOrderSince.get(o.uid || o.id) >= READY_DELAY_MS).length;
 
     trackOrderStages(orders.ordersByCourier || []);
+    trackReassignments(orders.ordersByCourier || [], Date.now());
     processTracking(tracking.couriers, orders.ordersByCourier || []);
 
     const noActiveOrders = ![...courierMap.values()].some(c => c.activeOrderCount > 0);

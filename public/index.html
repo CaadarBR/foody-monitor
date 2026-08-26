@@ -568,6 +568,8 @@
         <option value="accept">⏳ Demora pra aceitar</option>
         <option value="depart">⏳ Demora pra sair</option>
         <option value="missing">🚨 Sumiu do mapa</option>
+        <option value="dropped">🚨 Desconectou com pedido</option>
+        <option value="reassigned">🔁 Pedido reatribuído</option>
         <option value="single">✅ Saiu com 1 pedido</option>
         <option value="cookie">🍪 Cookie expirado</option>
         <option value="shiftEnd">🌙 Expediente encerrado</option>
@@ -928,8 +930,8 @@ function renderLog() {
     return;
   }
 
-  const icons = { delivering: '🚀', available: '✅', warning: '⚠️', alert: '🚨', missing: '👻' };
-  const cls   = { delivering: 'log-info', available: 'log-success', warning: 'log-warn', alert: 'log-danger', missing: 'log-danger' };
+  const icons = { delivering: '🚀', available: '✅', warning: '⚠️', alert: '🚨', missing: '👻', dropped: '🚨' };
+  const cls   = { delivering: 'log-info', available: 'log-success', warning: 'log-warn', alert: 'log-danger', missing: 'log-danger', dropped: 'log-danger' };
 
   container.innerHTML = [...filtered].reverse().map(e => {
     const time = new Date(e.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -954,7 +956,7 @@ function renderLog() {
 
     if (e.type === 'alert') return `
       <div class="log-entry ${e.alertType === 'single' ? 'log-success' : 'log-danger'}">
-        <span class="log-time">${time}</span><span>${e.alertType === 'missing' ? '🚨' : e.alertType === 'cookie' ? '🍪' : e.alertType === 'single' ? '✅' : (e.alertType === 'accept' || e.alertType === 'depart') ? '⏳' : '⚠️'}</span>
+        <span class="log-time">${time}</span><span>${e.alertType === 'missing' ? '🚨' : e.alertType === 'dropped' ? '🚨' : e.alertType === 'reassigned' ? '🔁' : e.alertType === 'cookie' ? '🍪' : e.alertType === 'single' ? '✅' : (e.alertType === 'accept' || e.alertType === 'depart') ? '⏳' : '⚠️'}</span>
         <span>${e.msg}</span>
       </div>`;
 
@@ -1241,8 +1243,8 @@ function updateAlertTimers() {
 }
 
 function alertCardHtml(a) {
-  const cls  = a.type === 'missing' || a.type === 'cookie' ? 'danger' : a.type === 'single' || a.type === 'shiftEnd' ? 'good' : 'warn';
-  const icon = a.type === 'missing' ? '🚨' : a.type === 'cookie' ? '🍪' : a.type === 'single' ? '✅' : a.type === 'shiftEnd' ? '🌙' : (a.type === 'accept' || a.type === 'depart') ? '⏳' : '⚠️';
+  const cls  = a.type === 'missing' || a.type === 'dropped' || a.type === 'cookie' ? 'danger' : a.type === 'single' || a.type === 'shiftEnd' ? 'good' : 'warn';
+  const icon = a.type === 'missing' ? '🚨' : a.type === 'dropped' ? '🚨' : a.type === 'reassigned' ? '🔁' : a.type === 'cookie' ? '🍪' : a.type === 'single' ? '✅' : a.type === 'shiftEnd' ? '🌙' : (a.type === 'accept' || a.type === 'depart') ? '⏳' : '⚠️';
   const nudgeDefault = NUDGE_DEFAULTS[a.type];
   return `
     <div class="alert-card ${cls}">
