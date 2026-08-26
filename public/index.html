@@ -89,6 +89,7 @@
     .banner-blue { background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.3); }
     .banner-orange { background: rgba(249,115,22,0.12); border: 1px solid rgba(249,115,22,0.35); }
     .nogps { color: #eab308; font-weight: 600; }
+    .parked-line { margin-top: 6px; font-size: 12px; font-weight: 700; color: #f97316; font-variant-numeric: tabular-nums; text-align: center; }
     .banner-red  { background: rgba(239,68,68,0.12);  border: 1px solid rgba(239,68,68,0.4); }
 
     .btn-sm {
@@ -1407,6 +1408,10 @@ function renderCouriers() {
 
     const vehicle = c.vehicleType === 'motorcycle' ? '🏍️ Moto' : '🚗 Carro';
 
+    // Relojinho de "parado no mesmo local" — só pra quem está EM ENTREGA e parado há >2min
+    const parkedMs = c.stSince ? (now - c.stSince) : 0;
+    const showParked = c.status === 'delivering' && parkedMs > 120000;
+
     return `
       <div class="courier-card ${c.status}">
         <div class="card-header">
@@ -1423,6 +1428,7 @@ function renderCouriers() {
           <div class="timer ${cfg.timerClass}">${fmtDuration(timerMs)}</div>
           <div class="timer-label">${cfg.timerLabel}</div>
         </div>
+        ${showParked ? `<div class="parked-line">📍 parado há ${fmtDuration(parkedMs)}</div>` : ''}
         <div class="card-footer">
           <span>online desde ${new Date(c.onlineAt || c.statusSince).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</span>
           <span>visto ${fmtRelative(c.lastSeen)}</span>
