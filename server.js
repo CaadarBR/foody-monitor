@@ -715,6 +715,23 @@ app.get('/config', (req, res) => {
   res.json({ configured: !!config.cookie, usingEnv: !!process.env.FOODY_COOKIE });
 });
 
+// TEMP probe — espiar a "fila de entregadores" (company-connections agrega os
+// couriersForDespatching = disponíveis pra receber). Só pra descobrir os campos.
+app.get('/api/fila-debug', async (req, res) => {
+  if (!hasDataAccess(req)) return res.status(401).json({ error: 'sem acesso' });
+  try {
+    const cc = await foodyFetch('https://app.foodydelivery.com/api/home-data/company-connections');
+    const trk = await foodyFetch('https://app.foodydelivery.com/api/home-data/couriers-for-tracking');
+    res.json({
+      company_connections_keys: Object.keys(cc || {}),
+      couriersForDespatching: cc.couriersForDespatching || null,
+      companyCourierConnectionStatus: cc.companyCourierConnectionStatus || null,
+      couriersForTracking_sample: (trk.couriers || [])[0] || null,
+      couriersForTracking_count: (trk.couriers || []).length,
+    });
+  } catch (e) { res.json({ error: e.message }); }
+});
+
 function isAdmin(req) {
   const pass = req.headers['x-admin-password'] || req.query.adminPassword;
   return !!config.adminPassword && pass === config.adminPassword;
