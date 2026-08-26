@@ -87,6 +87,7 @@
       font-size: 13px;
     }
     .banner-blue { background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.3); }
+    .banner-orange { background: rgba(249,115,22,0.12); border: 1px solid rgba(249,115,22,0.35); }
     .banner-red  { background: rgba(239,68,68,0.12);  border: 1px solid rgba(239,68,68,0.4); }
 
     .btn-sm {
@@ -513,6 +514,9 @@
   <div class="banner banner-blue" id="idleBanner" style="display:none;">
     <span>🌙 Expediente encerrado — sem pedidos pendentes</span>
   </div>
+  <div class="banner banner-orange" id="closingBanner" style="display:none;">
+    <span>🔻 Encerrando — loja fechada, sem pedidos pra distribuir</span>
+  </div>
 
   <!-- Segurando pedido (cronômetro ao vivo) -->
   <div id="holdingSection" style="display:none;margin-bottom:6px;">
@@ -731,6 +735,7 @@ function showRestricted() {
   setStatus('');
   document.getElementById('sessionBanner').style.display       = 'none';
   document.getElementById('idleBanner').style.display           = 'none';
+  document.getElementById('closingBanner').style.display        = 'none';
   document.getElementById('notifBanner').style.display          = 'none';
   document.getElementById('alertsSection').style.display        = 'none';
   document.getElementById('alertsHistorySection').style.display = 'none';
@@ -769,6 +774,8 @@ function applyState(state) {
   alertMinutes      = state.alertMinutes;
   readyOrdersCount  = state.readyOrdersCount;
   document.getElementById('idleBanner').style.display = state.shiftIdle ? 'flex' : 'none';
+  // Encerrando só aparece se ainda NÃO encerrou de vez (senão mostra os dois)
+  document.getElementById('closingBanner').style.display = (state.shiftClosing && !state.shiftIdle) ? 'flex' : 'none';
 
   if (state.serverStartedAt) {
     const upMin = Math.floor((Date.now() - state.serverStartedAt) / 60000);

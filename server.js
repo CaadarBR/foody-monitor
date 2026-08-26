@@ -168,6 +168,45 @@ function isLateNightBRT() {
   return h >= 3 && h < 8;
 }
 
+// ── Loja aberta/fechada (CardápioWeb) ──────────────────────────────────────────
+// Fonte de verdade do horário: GET /api/partner/v1/merchant → opening_hours + custom_dates.
+// Rate limit 5/min, então busco e faço cache (renova a cada 30min).
+const CW_API_KEY     = process.env.CW_API_KEY     || '9kyY4VvYq39YQ1u9QRK4rudY8wJNEWt5ckMfhQzg';
+const CW_PARTNER_KEY = process.env.CW_PARTNER_KEY || '12418';
+let merchantCache = null;
+let merchantFetchedAt = 0;
+
+async function refreshMerchant() {
+  if (Date.now() - merchantFetchedAt < 30 * 60 * 1000 && merchantCache) return;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 12000);
+  try {
+    const r = await fetch('https://integracao.cardapioweb.com/api/partner/v1/merchant', {
+      headers: { 'X-API-KEY': CW_API_KEY, 'X-PARTNER-KEY': CW_PARTNER_KEY, 'Accept': 'application/json' },
+      signal: controller.signal,
+    });
+    const j = await r.json();
+    if (j && j.opening_hours) { merchantCache = j; merchantFetchedAt = Date.now(); }
+  } catch (e) { console.error('[MERCHANT]', e.message); }
+  finally { clearTimeout(timer); }
+}
+
+// Loja aberta agora? true/false, ou null se não sei (sem cache). Horário em BRT (UTC-3).
+function isStoreOpenNowBRT() {
+  const oh = merchantCache && merchantCache.opening_hours;
+  if (!oh) return null;
+  const now = new Date(Date.now() - 3 * 3600 * 1000); // desloca pra BRT e leio em UTC
+  const y = now.getUTCFullYear(), mo = String(now.getUTCMonth() + 1).padStart(2, '0'), d = String(now.getUTCDate()).padStart(2, '0');
+  const dateKey = `${y}-${mo}-${d}`;
+  const wd = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'][now.getUTCDay()];
+  let intervals = (oh.custom_dates && oh.custom_dates[dateKey]) ? (oh.custom_dates[dateKey].intervals || []) : (oh[wd] || []);
+  const hm = now.getUTCHours() * 60 + now.getUTCMinutes();
+  return intervals.some(([a, b]) => {
+    const [ah, am] = a.split(':').map(Number), [bh, bm] = b.split(':').map(Number);
+    return hm >= ah * 60 + am && hm <= bh * 60 + bm;
+  });
+}
+
 function appendLog(entry) {
   const date = operationalDate();
   const file = path.join(LOGS_DIR, `${date}.json`);
@@ -269,7 +308,8 @@ let sessionOk        = false;
 let pollRunning      = false;
 let hasLoggedStart   = false;
 let currentOpDate    = operationalDate();
-let shiftIdle         = false; // true quando, de madrugada, não há mais pedido pronto nem entrega em rota
+let shiftIdle         = false; // true quando não há mais pedido pronto/em rota e ninguém ativo (encerrado)
+let shiftClosing      = false; // true quando a loja fechou e não há mais nada pra distribuir (encerrando)
 
 let lastCookieAlertAt = 0;
 let consecutiveFailures = 0;
@@ -600,8 +640,19 @@ async function doPoll() {
     trackReassignments(orders.ordersByCourier || [], Date.now());
     processTracking(tracking.couriers, orders.ordersByCourier || []);
 
+    await refreshMerchant();
+    const storeOpen   = isStoreOpenNowBRT();
+    // fecha = loja fechada de verdade; se não sei o horário, cai no fallback da madrugada
+    const storeClosed = storeOpen === false || (storeOpen === null && isLateNightBRT());
+    const pendingCount = (orders.pendingOrdersByCompany || []).length;
     const noActiveOrders = ![...courierMap.values()].some(c => c.activeOrderCount > 0);
-    const idleNow = isLateNightBRT() && readyOrdersCount === 0 && noActiveOrders;
+    const nothingToDispatch = readyOrdersCount === 0 && pendingCount === 0;
+
+    // Encerrando: loja fechada + nada mais pra distribuir na fila (pode ter gente
+    // terminando os últimos). Se cair pedido novo pra distribuir, sai sozinho desse estado.
+    shiftClosing = storeClosed && nothingToDispatch;
+    // Encerrado: além do acima, ninguém mais com pedido ativo (todos já terminaram/saíram).
+    const idleNow = shiftClosing && noActiveOrders;
     if (idleNow && !shiftIdle) {
       addAlert('shiftEnd', 'Expediente encerrado — sem pedidos pendentes.');
     }
@@ -666,6 +717,8 @@ function buildStatePayload() {
     lastUpdated,
     readyOrdersCount,
     shiftIdle,
+    shiftClosing,
+    storeOpen: isStoreOpenNowBRT(),
     alertMinutes:     config.alertMinutes,
     couriers:         [...courierMap.values()],
     alerts:           activeAlerts,
