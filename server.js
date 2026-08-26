@@ -644,9 +644,10 @@ async function doPoll() {
     const storeOpen   = isStoreOpenNowBRT();
     // fecha = loja fechada de verdade; se não sei o horário, cai no fallback da madrugada
     const storeClosed = storeOpen === false || (storeOpen === null && isLateNightBRT());
-    const pendingCount = (orders.pendingOrdersByCompany || []).length;
     const noActiveOrders = ![...courierMap.values()].some(c => c.activeOrderCount > 0);
-    const nothingToDispatch = readyOrdersCount === 0 && pendingCount === 0;
+    // "Nada pra distribuir" = nenhum pedido PRONTO esperando na fila. Não uso o total de
+    // pendentes porque pedido "open" abandonado (nunca finalizou) travaria o encerrando pra sempre.
+    const nothingToDispatch = readyOrdersCount === 0;
 
     // Encerrando: loja fechada + nada mais pra distribuir na fila (pode ter gente
     // terminando os últimos). Se cair pedido novo pra distribuir, sai sozinho desse estado.
