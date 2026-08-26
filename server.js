@@ -202,10 +202,28 @@ async function foodyFetch(url) {
       signal: controller.signal,
     });
     const text = await r.text();
-    return JSON.parse(text);
+    if (!r.ok) {
+      const err = new Error(`HTTP ${r.status}`);
+      err.status = r.status;
+      throw err;
+    }
+    try {
+      return JSON.parse(text);
+    } catch (e) {
+      // Corpo não-JSON com 200 = provável página de login (cookie caiu).
+      const err = new Error('resposta não-JSON do Foody');
+      err.status = r.status;
+      err.nonJson = true;
+      throw err;
+    }
   } finally {
     clearTimeout(timer);
   }
+}
+
+// Erro que indica sessão/cookie inválido de verdade (vs. instabilidade momentânea).
+function isAuthError(e) {
+  return !!e && (e.status === 401 || e.status === 403 || (e.nonJson && e.status === 200));
 }
 
 // POST no Foody (chat/ações). Usa a mesma sessão (cookie SESSION) do foodyFetch.
@@ -252,6 +270,7 @@ let currentOpDate    = operationalDate();
 let shiftIdle         = false; // true quando, de madrugada, não há mais pedido pronto nem entrega em rota
 
 let lastCookieAlertAt = 0;
+let consecutiveFailures = 0;
 
 const STATE_FILE = path.join(LOGS_DIR, 'state.json');
 
@@ -547,18 +566,26 @@ async function doPoll() {
 
     lastUpdated = Date.now();
     sessionOk   = true;
+    consecutiveFailures = 0;
     saveState();
   } catch (e) {
-    const wasOk = sessionOk;
-    sessionOk = false;
-    console.error('[POLL]', e.message);
+    consecutiveFailures++;
+    console.error('[POLL]', e.message, `(falha ${consecutiveFailures})`);
 
-    // Avisa por push quando a sessão do Foody cai, pra não depender de alguém
-    // abrir o site pra descobrir que o cookie expirou.
-    const now = Date.now();
-    if (wasOk || now - lastCookieAlertAt > 30 * 60 * 1000) {
-      lastCookieAlertAt = now;
-      addAlert('cookie', 'Cookie do Foody expirou ou sessão caiu — abra o monitor e atualize o cookie nas Configurações!');
+    // Blip isolado (timeout, 5xx momentâneo, JSON quebrado num ciclo) NÃO vira
+    // "cookie expirou" — só derruba a sessão se for erro de auth de verdade OU
+    // se falhar 3x seguidas (~30s), aí sim é queda persistente.
+    const authLikely = isAuthError(e);
+    if (authLikely || consecutiveFailures >= 3) {
+      const wasOk = sessionOk;
+      sessionOk = false;
+      const now = Date.now();
+      if (wasOk || now - lastCookieAlertAt > 30 * 60 * 1000) {
+        lastCookieAlertAt = now;
+        addAlert('cookie', authLikely
+          ? 'Cookie do Foody expirou ou sessão caiu — abra o monitor e atualize o cookie nas Configurações!'
+          : 'Monitor sem resposta do Foody há alguns ciclos — pode ser instabilidade. Se persistir, atualize o cookie.');
+      }
     }
   } finally {
     pollRunning = false;
