@@ -726,6 +726,7 @@ app.get('/api/fila-debug', async (req, res) => {
       company_connections_keys: Object.keys(cc || {}),
       couriersForDespatching: cc.couriersForDespatching || null,
       companyCourierConnectionStatus: cc.companyCourierConnectionStatus || null,
+      companyConnections: cc.companyConnections || null,
       couriersForTracking_sample: (trk.couriers || [])[0] || null,
       couriersForTracking_count: (trk.couriers || []).length,
     });
