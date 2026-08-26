@@ -302,7 +302,8 @@ function loadOnlineTimes() {
 loadOnlineTimes();
 
 function addAlert(type, msg, courierName = null, extra = {}) {
-  activeAlerts.unshift({ id: Date.now(), type, msg, time: new Date().toISOString(), courierName, ...extra });
+  const alert = { id: Date.now(), type, msg, time: new Date().toISOString(), courierName, ...extra };
+  activeAlerts.unshift(alert);
   if (activeAlerts.length > 30) activeAlerts.pop();
   appendLog({ type: 'alert', alertType: type, msg, courierName });
   console.log(`[ALERTA] ${msg}`);
@@ -318,6 +319,14 @@ function addAlert(type, msg, courierName = null, extra = {}) {
     tag: `${type}-${courierName || Date.now()}`,
     type,
   }).catch(e => console.error('[PUSH]', e.message));
+  return alert;
+}
+
+// Congela o cronômetro de um alerta de etapa quando o entregador finalmente aceita/sai.
+function resolveStageAlert(prev, now) {
+  if (!prev || !prev.alerted || !prev.alertId) return;
+  const al = activeAlerts.find(a => a.id === prev.alertId);
+  if (al && !al.resolvedAt) al.resolvedAt = now;
 }
 
 function orderNumberOf(o) {
@@ -337,21 +346,27 @@ function trackOrderStages(ordersByCourierList) {
       seen.add(key);
       const prev = orderStageSince.get(key);
       if (!prev || prev.status !== o.status) {
-        orderStageSince.set(key, { status: o.status, since: now, alerted: false, courier, num: orderNumberOf(o) });
+        resolveStageAlert(prev, now); // etapa anterior terminou → congela o cronômetro
+        orderStageSince.set(key, { status: o.status, since: now, alerted: false, alertId: null, courier, num: orderNumberOf(o) });
         continue;
       }
       if (!prev.alerted && now - prev.since >= ACCEPT_DELAY_MS) {
         if (o.status === 'dispatched') {
-          addAlert('accept', `${courier} recebeu o #${prev.num} e não aceitou há +5min`, courier);
-          prev.alerted = true;
+          const al = addAlert('accept', `${courier} recebeu o #${prev.num} e ainda não aceitou`, courier, { stageSince: prev.since });
+          prev.alerted = true; prev.alertId = al.id;
         } else if (o.status === 'accepted') {
-          addAlert('depart', `${courier} aceitou o #${prev.num} mas não saiu há +5min`, courier);
-          prev.alerted = true;
+          const al = addAlert('depart', `${courier} aceitou o #${prev.num} mas ainda não saiu`, courier, { stageSince: prev.since });
+          prev.alerted = true; prev.alertId = al.id;
         }
       }
     }
   }
-  for (const k of orderStageSince.keys()) if (!seen.has(k)) orderStageSince.delete(k);
+  for (const k of orderStageSince.keys()) {
+    if (!seen.has(k)) {
+      resolveStageAlert(orderStageSince.get(k), now); // pedido saiu da lista → congela
+      orderStageSince.delete(k);
+    }
+  }
 }
 
 function processTracking(trackingList, ordersByCourierList) {
@@ -562,6 +577,18 @@ schedulePoll();
 
 // ── Rotas HTTP ────────────────────────────────────────────────────────────────
 
+// Pedidos que o entregador está "segurando": recebeu e não aceitou (dispatched)
+// ou aceitou e não saiu (accepted). Cada um vira um card com cronômetro ao vivo.
+function buildHolding() {
+  const out = [];
+  for (const [uid, s] of orderStageSince) {
+    if (s.status === 'dispatched' || s.status === 'accepted') {
+      out.push({ uid, courier: s.courier, num: s.num, stage: s.status, since: s.since });
+    }
+  }
+  return out;
+}
+
 function buildStatePayload() {
   return {
     configured:       !!config.cookie,
@@ -572,6 +599,7 @@ function buildStatePayload() {
     alertMinutes:     config.alertMinutes,
     couriers:         [...courierMap.values()],
     alerts:           activeAlerts,
+    holding:          buildHolding(),
     serverStartedAt:  SERVER_STARTED_AT,
   };
 }

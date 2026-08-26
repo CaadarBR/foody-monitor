@@ -156,6 +156,53 @@
     .alert-msg   { font-size: 13px; font-weight: 600; line-height: 1.4; }
     .alert-time  { font-size: 11px; color: var(--muted); margin-top: 2px; }
 
+    .holding-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      gap: 10px;
+    }
+    .holding-card {
+      border-radius: 10px;
+      padding: 12px 14px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      animation: slideIn 0.25s ease;
+      border: 1px solid transparent;
+      transition: background 0.4s, border-color 0.4s;
+    }
+    .holding-card .hc-body { flex: 1; min-width: 0; }
+    .holding-card .hc-name { font-size: 14px; font-weight: 700; line-height: 1.2; }
+    .holding-card .hc-stage { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    .holding-card .hc-timer {
+      font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums;
+      letter-spacing: 0.5px; flex-shrink: 0;
+    }
+    /* escala de cor por tempo segurando */
+    .holding-card.lvl-ok    { background: rgba(34,197,94,0.10);  border-color: rgba(34,197,94,0.35); }
+    .holding-card.lvl-ok    .hc-timer { color: #22c55e; }
+    .holding-card.lvl-warn  { background: rgba(234,179,8,0.12);  border-color: rgba(234,179,8,0.45); }
+    .holding-card.lvl-warn  .hc-timer { color: #eab308; }
+    .holding-card.lvl-high  { background: rgba(249,115,22,0.14); border-color: rgba(249,115,22,0.5); }
+    .holding-card.lvl-high  .hc-timer { color: #f97316; }
+    .holding-card.lvl-crit  { background: rgba(239,68,68,0.16);  border-color: rgba(239,68,68,0.6); animation: pulseTimer 1.2s ease-in-out infinite; }
+    .holding-card.lvl-crit  .hc-timer { color: #ef4444; }
+
+    .alert-timer {
+      flex-shrink: 0;
+      align-self: center;
+      font-variant-numeric: tabular-nums;
+      font-weight: 700;
+      font-size: 15px;
+      padding: 3px 9px;
+      border-radius: 7px;
+      letter-spacing: 0.5px;
+      white-space: nowrap;
+    }
+    .alert-timer.running { color: #f97316; background: rgba(249,115,22,0.14); animation: pulseTimer 1.2s ease-in-out infinite; }
+    .alert-timer.done    { color: #22c55e; background: rgba(34,197,94,0.14); }
+    @keyframes pulseTimer { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+
     .btn-dismiss {
       background: none; border: none; color: var(--muted);
       font-size: 16px; cursor: pointer; padding: 0 2px; flex-shrink: 0;
@@ -470,6 +517,12 @@
     <span>🌙 Expediente encerrado — sem pedidos pendentes</span>
   </div>
 
+  <!-- Segurando pedido (cronômetro ao vivo) -->
+  <div id="holdingSection" style="display:none;margin-bottom:6px;">
+    <div class="section-title">⏳ Segurando pedido</div>
+    <div class="holding-grid" id="holdingGrid"></div>
+  </div>
+
   <!-- Couriers -->
   <div style="display:flex;align-items:center;justify-content:space-between;margin:16px 0 8px;">
     <div class="section-title" style="margin:0;">🏍️ Entregadores</div>
@@ -666,6 +719,7 @@ async function sendNudge() {
 // ─── Estado ───────────────────────────────────────────────────────────────────
 const couriers = new Map();
 let alerts           = [];
+let holding          = [];
 let alertMinutes     = 15;
 let readyOrdersCount = 0;
 let lastServerUpdate = null;
@@ -681,6 +735,7 @@ function showRestricted() {
   document.getElementById('notifBanner').style.display          = 'none';
   document.getElementById('alertsSection').style.display        = 'none';
   document.getElementById('alertsHistorySection').style.display = 'none';
+  document.getElementById('holdingSection').style.display       = 'none';
   document.getElementById('readyBadge').style.display            = 'none';
   document.getElementById('couriersGrid').innerHTML = `
     <div class="empty-state">
@@ -743,13 +798,15 @@ function applyState(state) {
   }
   firstLoad = false;
 
-  alerts = state.alerts;
+  alerts  = state.alerts;
+  holding = state.holding || [];
   couriers.clear();
   for (const c of state.couriers) couriers.set(c.id, c);
 
   document.getElementById('refreshText').textContent = 'ao vivo';
   renderAlerts();
   renderCouriers();
+  renderHolding();
   renderReadyBadge();
 }
 
@@ -1171,6 +1228,21 @@ function fmtAlertTime(iso) {
   return `${d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} ${time}`;
 }
 
+// Cronômetro do alerta: conta pra cima enquanto não aceita/sai; congela (verde) quando resolve.
+function alertTimerHtml(a) {
+  const running = !a.resolvedAt;
+  const ms      = (a.resolvedAt || Date.now()) - a.stageSince;
+  return `<span class="alert-timer ${running ? 'running' : 'done'}" data-since="${a.stageSince}"${a.resolvedAt ? ` data-resolved="${a.resolvedAt}"` : ''}>${running ? '⏱ ' : '✓ '}${fmtDuration(ms)}</span>`;
+}
+
+function updateAlertTimers() {
+  document.querySelectorAll('.alert-timer[data-since]').forEach(el => {
+    if (el.dataset.resolved) return; // já congelado
+    const ms = Date.now() - Number(el.dataset.since);
+    el.textContent = '⏱ ' + fmtDuration(ms);
+  });
+}
+
 function alertCardHtml(a) {
   const cls  = a.type === 'missing' || a.type === 'cookie' ? 'danger' : a.type === 'single' || a.type === 'shiftEnd' ? 'good' : 'warn';
   const icon = a.type === 'missing' ? '🚨' : a.type === 'cookie' ? '🍪' : a.type === 'single' ? '✅' : a.type === 'shiftEnd' ? '🌙' : (a.type === 'accept' || a.type === 'depart') ? '⏳' : '⚠️';
@@ -1182,6 +1254,7 @@ function alertCardHtml(a) {
         <div class="alert-msg">${a.msg}${(a.lat && a.lng) ? ` <a class="coord-link" href="https://www.google.com/maps?q=${a.lat},${a.lng}" target="_blank" rel="noopener" title="Abrir no Google Maps">${a.lat}, ${a.lng}</a>` : ''}</div>
         <div class="alert-time">${fmtAlertTime(a.time)}${nudgeDefault ? ` <button class="alert-nudge" data-name="${(a.courierName || '').replace(/"/g,'&quot;')}" data-default="${nudgeDefault}" onclick="openNudge(this)">⚠️ alertar entregador</button>` : ''}</div>
       </div>
+      ${a.stageSince ? alertTimerHtml(a) : ''}
       <button class="btn-dismiss" onclick="dismissAlert(${a.id})">✕</button>
     </div>`;
 }
@@ -1238,6 +1311,57 @@ function renderReadyBadge() {
   } else {
     badge.style.display = 'none';
   }
+}
+
+// ─── Segurando pedido ─────────────────────────────────────────────────────────
+function holdingLevel(ms) {
+  const m = ms / 60000;
+  if (m < 1) return 'lvl-ok';
+  if (m < 3) return 'lvl-warn';
+  if (m < 5) return 'lvl-high';
+  return 'lvl-crit';
+}
+
+function renderHolding() {
+  const section = document.getElementById('holdingSection');
+  const grid    = document.getElementById('holdingGrid');
+  if (!holding || holding.length === 0) {
+    section.style.display = 'none';
+    grid.innerHTML = '';
+    return;
+  }
+  section.style.display = 'block';
+  const now    = Date.now();
+  const sorted = [...holding].sort((a, b) => a.since - b.since); // quem segura há mais tempo no topo
+  grid.innerHTML = sorted.map(h => {
+    const ms    = now - h.since;
+    const num   = h.num != null ? ` o #${h.num}` : '';
+    const stage = h.stage === 'dispatched' ? `recebeu${num} e não aceitou` : `aceitou${num} e não saiu`;
+    const icon  = h.stage === 'dispatched' ? '📥' : '🛵';
+    return `
+      <div class="holding-card ${holdingLevel(ms)}" data-since="${h.since}">
+        <span style="font-size:20px;flex-shrink:0;">${icon}</span>
+        <div class="hc-body">
+          <div class="hc-name">${h.courier || 'Entregador'}</div>
+          <div class="hc-stage">${stage}</div>
+        </div>
+        <span class="hc-timer">${fmtDuration(ms)}</span>
+      </div>`;
+  }).join('');
+}
+
+function updateHoldingTimers() {
+  const now = Date.now();
+  document.querySelectorAll('.holding-card[data-since]').forEach(el => {
+    const ms  = now - Number(el.dataset.since);
+    const t   = el.querySelector('.hc-timer');
+    if (t) t.textContent = fmtDuration(ms);
+    const lvl = holdingLevel(ms);
+    if (!el.classList.contains(lvl)) {
+      el.classList.remove('lvl-ok', 'lvl-warn', 'lvl-high', 'lvl-crit');
+      el.classList.add(lvl);
+    }
+  });
 }
 
 function renderCouriers() {
@@ -1329,7 +1453,7 @@ async function forceRefresh() {
 
 function startTick() {
   clearInterval(tickInterval);
-  tickInterval = setInterval(renderCouriers, 1000);
+  tickInterval = setInterval(() => { renderCouriers(); updateHoldingTimers(); updateAlertTimers(); }, 1000);
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
