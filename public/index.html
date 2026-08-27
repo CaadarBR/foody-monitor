@@ -578,6 +578,7 @@
         <option value="dropped">🚨 Desconectou com pedido</option>
         <option value="reassigned">🔁 Pedido reatribuído</option>
         <option value="stationary">⏸️ Parado no mesmo local</option>
+        <option value="zone">📍 Zona (entrou/saiu)</option>
         <option value="single">✅ Saiu com 1 pedido</option>
         <option value="cookie">🍪 Cookie expirado</option>
         <option value="shiftEnd">🌙 Expediente encerrado</option>
@@ -639,6 +640,15 @@
         <label class="form-label">⚡ Intervalo de consulta ao Foody (ms)</label>
         <input type="number" id="pollIntervalInput" value="10000" min="200" step="100">
         <div class="help-box">Quanto menor, mais rápido atualiza — mas mais risco de o Foody bloquear ou derrubar a sessão.</div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">🤖 Auto-mensagem pra quem some</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
+          <input type="checkbox" id="autoNudgeToggle" onchange="toggleAutoNudge(this.checked)">
+          Enviar <b>"App Desconectado"</b> automático quando alguém sumir do mapa
+        </label>
+        <div class="help-box">⚠️ Manda mensagem <b>REAL</b> pro entregador no chat do Foody. Deixe <b>desligado</b> fora dos momentos em que quiser cobrar. Padrão: desligado.</div>
       </div>
 
       <div class="form-group">
@@ -728,6 +738,7 @@ const couriers = new Map();
 let alerts           = [];
 let holding          = [];
 let alertMinutes     = 15;
+let autoNudgeMissing = false;
 let readyOrdersCount = 0;
 let lastServerUpdate = null;
 let knownAlertIds    = new Set();
@@ -776,6 +787,7 @@ function applyState(state) {
 
   lastServerUpdate  = state.lastUpdated;
   alertMinutes      = state.alertMinutes;
+  autoNudgeMissing  = !!state.autoNudgeMissing;
   readyOrdersCount  = state.readyOrdersCount;
   document.getElementById('idleBanner').style.display = state.shiftIdle ? 'flex' : 'none';
   // Encerrando só aparece se ainda NÃO encerrou de vez (senão mostra os dois)
@@ -968,11 +980,18 @@ function renderLog() {
         <span>${e.courierName}: ${STATUS_PT[e.from] || e.from} → ${STATUS_PT[e.to] || e.to}</span>
       </div>`;
 
-    if (e.type === 'alert') return `
+    if (e.type === 'alert') {
+      const loc = (e.lat && e.lng)
+        ? ` <a class="coord-link" href="https://www.google.com/maps?q=${e.lat},${e.lng}" target="_blank" rel="noopener" title="Abrir no Google Maps">${e.lat}, ${e.lng}</a>`
+        : '';
+      const nul = e.gpsNull ? ` <span class="gps-null">null</span>` : '';
+      const ico = e.alertType === 'missing' ? '🚨' : e.alertType === 'dropped' ? '🚨' : e.alertType === 'reassigned' ? '🔁' : e.alertType === 'stationary' ? '⏸️' : e.alertType === 'zone' ? '📍' : e.alertType === 'cookie' ? '🍪' : e.alertType === 'single' ? '✅' : (e.alertType === 'accept' || e.alertType === 'depart') ? '⏳' : '⚠️';
+      return `
       <div class="log-entry ${e.alertType === 'single' ? 'log-success' : 'log-danger'}">
-        <span class="log-time">${time}</span><span>${e.alertType === 'missing' ? '🚨' : e.alertType === 'dropped' ? '🚨' : e.alertType === 'reassigned' ? '🔁' : e.alertType === 'stationary' ? '⏸️' : e.alertType === 'cookie' ? '🍪' : e.alertType === 'single' ? '✅' : (e.alertType === 'accept' || e.alertType === 'depart') ? '⏳' : '⚠️'}</span>
-        <span>${e.msg}</span>
+        <span class="log-time">${time}</span><span>${ico}</span>
+        <span>${e.msg}${loc}${nul}</span>
       </div>`;
+    }
 
     return '';
   }).join('');
@@ -1051,7 +1070,22 @@ async function renderSettingsGate() {
   document.getElementById('adminContent').style.display  = isAdminUnlocked ? 'block' : 'none';
   if (isAdminUnlocked) {
     document.getElementById('alertMinutes').value = alertMinutes;
+    document.getElementById('autoNudgeToggle').checked = autoNudgeMissing;
     await loadAdminExtras();
+  }
+}
+
+async function toggleAutoNudge(enabled) {
+  try {
+    const r = await fetch('/api/config/auto-nudge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-admin-password': adminPass },
+      body: JSON.stringify({ enabled }),
+    }).then(r => r.json());
+    if (r.ok) autoNudgeMissing = r.autoNudgeMissing;
+    else document.getElementById('autoNudgeToggle').checked = autoNudgeMissing; // reverte se falhou
+  } catch (e) {
+    document.getElementById('autoNudgeToggle').checked = autoNudgeMissing;
   }
 }
 
@@ -1258,7 +1292,7 @@ function updateAlertTimers() {
 
 function alertCardHtml(a) {
   const cls  = a.type === 'missing' || a.type === 'dropped' || a.type === 'cookie' ? 'danger' : a.type === 'single' || a.type === 'shiftEnd' ? 'good' : 'warn';
-  const icon = a.type === 'missing' ? '🚨' : a.type === 'dropped' ? '🚨' : a.type === 'reassigned' ? '🔁' : a.type === 'stationary' ? '⏸️' : a.type === 'cookie' ? '🍪' : a.type === 'single' ? '✅' : a.type === 'shiftEnd' ? '🌙' : (a.type === 'accept' || a.type === 'depart') ? '⏳' : '⚠️';
+  const icon = a.type === 'missing' ? '🚨' : a.type === 'dropped' ? '🚨' : a.type === 'reassigned' ? '🔁' : a.type === 'stationary' ? '⏸️' : a.type === 'zone' ? '📍' : a.type === 'cookie' ? '🍪' : a.type === 'single' ? '✅' : a.type === 'shiftEnd' ? '🌙' : (a.type === 'accept' || a.type === 'depart') ? '⏳' : '⚠️';
   const nudgeDefault = NUDGE_DEFAULTS[a.type];
   return `
     <div class="alert-card ${cls}">

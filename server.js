@@ -29,6 +29,8 @@ let config = {
   adminPassword: '',   // senha do ADM MASTER (John) — protege Configurações e libera os dados
   allowedIps: [],       // IPs liberados a ver os dados sem precisar logar como ADM
   pollIntervalMs: 10000, // de quanto em quanto tempo consulta o Foody
+  autoNudgeMissing: false, // manda "App Desconectado" automático pra quem some (padrão DESLIGADO)
+  zones: [],            // cercas virtuais: [{ id, name, polygon: [[lat,lng],...] }]
 };
 
 function loadConfig() {
@@ -44,6 +46,8 @@ function loadConfig() {
       if (saved.adminPassword) config.adminPassword = saved.adminPassword;
       if (Array.isArray(saved.allowedIps)) config.allowedIps = saved.allowedIps;
       if (saved.pollIntervalMs) config.pollIntervalMs = saved.pollIntervalMs;
+      if (typeof saved.autoNudgeMissing === 'boolean') config.autoNudgeMissing = saved.autoNudgeMissing;
+      if (Array.isArray(saved.zones)) config.zones = saved.zones;
     } catch (e) {}
   }
 }
@@ -226,6 +230,29 @@ function storeCoords() {
   return (isFinite(lat) && isFinite(lng)) ? { lat, lng } : null;
 }
 
+// ── Cerca virtual (geofence) ───────────────────────────────────────────────────
+// Ponto dentro do polígono? Ray casting. poly = [[lat,lng], ...]. (x=lng, y=lat)
+function pointInPolygon(lat, lng, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const yi = poly[i][0], xi = poly[i][1];
+    const yj = poly[j][0], xj = poly[j][1];
+    const intersect = ((yi > lat) !== (yj > lat)) &&
+      (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+// Quais zonas contêm esse ponto (retorna as chaves id/name)
+function zonesContaining(lat, lng) {
+  const out = [];
+  for (const z of (config.zones || [])) {
+    if (z.polygon && z.polygon.length >= 3 && pointInPolygon(lat, lng, z.polygon)) out.push(z.id || z.name);
+  }
+  return out;
+}
+
 function appendLog(entry) {
   const date = operationalDate();
   const file = path.join(LOGS_DIR, `${date}.json`);
@@ -399,13 +426,16 @@ function addAlert(type, msg, courierName = null, extra = {}) {
   const alert = { id: Date.now(), type, msg, time: new Date().toISOString(), courierName, ...extra };
   activeAlerts.unshift(alert);
   if (activeAlerts.length > 30) activeAlerts.pop();
-  appendLog({ type: 'alert', alertType: type, msg, courierName });
+  appendLog({ type: 'alert', alertType: type, msg, courierName,
+    ...(extra.lat != null && extra.lng != null ? { lat: extra.lat, lng: extra.lng } : {}),
+    ...(extra.gpsNull ? { gpsNull: true } : {}) });
   console.log(`[ALERTA] ${msg}`);
   sendPush({
     title: type === 'missing' ? '🚨 Sumiu do mapa!'
       : type === 'dropped'   ? '🚨 Desconectou com pedido'
       : type === 'reassigned'? '🔁 Pedido reatribuído'
       : type === 'stationary'? '⏸️ Parado no mesmo local'
+      : type === 'zone'      ? '📍 Zona'
       : type === 'single'    ? '✅ Saiu com 1 entrega'
       : type === 'cookie'    ? '🍪 Cookie expirado!'
       : type === 'shiftEnd'  ? '🌙 Expediente encerrado'
@@ -578,6 +608,18 @@ function processTracking(trackingList, ordersByCourierList) {
           cs.stAlerted = true; cs.stAlertId = al.id;
         }
       }
+
+      // Cercas virtuais: detecta ENTRAR / SAIR de cada zona (só se houver zona configurada)
+      if ((config.zones || []).length) {
+        const nowIn = new Set(zonesContaining(clat, clng));
+        const wasIn = new Set(cs.zonesIn || []);
+        for (const z of config.zones) {
+          const key = z.id || z.name;
+          if (nowIn.has(key) && !wasIn.has(key))       addAlert('zone', `${cs.name} entrou em ${z.name}`, cs.name, { lat: clat, lng: clng });
+          else if (!nowIn.has(key) && wasIn.has(key))  addAlert('zone', `${cs.name} saiu de ${z.name}`,   cs.name, { lat: clat, lng: clng });
+        }
+        cs.zonesIn = [...nowIn];
+      }
     }
     cs.missCount = 0; // reapareceu → zera o contador de flicker
     // Guarda o que ele tem na mão AGORA (pra saber, se sumir, se largou pedido)
@@ -655,6 +697,13 @@ function processTracking(trackingList, ordersByCourierList) {
     } else {
       appendLog({ type: 'status_change', courierName: cs.name, from: cs.status, to: 'missing', ...ctx });
       addAlert('missing', `${cs.name} sumiu do mapa!`, cs.name, { ...coords, ...ctx });
+    }
+
+    // Auto-mensagem pro entregador que sumiu — só se o liga/desliga estiver LIGADO (padrão OFF)
+    if (config.autoNudgeMissing) {
+      sendNudgeMessage(cs.name, 'App Desconectado')
+        .then(r => { appendLog({ type: 'auto_nudge', courierName: r.courierName, msg: 'App Desconectado' }); console.log(`[AUTO-NUDGE] → ${r.courierName}`); })
+        .catch(e => console.error('[AUTO-NUDGE]', e.message));
     }
     courierMap.delete(id);
   }
@@ -796,6 +845,8 @@ function buildStatePayload() {
     couriers:         [...courierMap.values()],
     alerts:           activeAlerts,
     holding:          buildHolding(),
+    autoNudgeMissing: !!config.autoNudgeMissing,
+    zonesCount:       (config.zones || []).length,
     serverStartedAt:  SERVER_STARTED_AT,
   };
 }
@@ -843,30 +894,56 @@ app.post('/api/alerts/dismiss', (req, res) => {
 
 // Cutucar entregador: manda mensagem no chat interno do Foody (mesma sessão do monitor).
 // Fluxo: acha o courierUid pelo nome → cria/pega a conversa → envia a mensagem.
+// Manda mensagem pro entregador no chat do Foody (reutilizável: endpoint + auto-envio)
+async function sendNudgeMessage(name, message) {
+  if (!config.cookie) throw new Error('Sessão do Foody não configurada.');
+  const norm = s => (s || '').trim().toLowerCase();
+  const list = await foodyFetch('https://app.foodydelivery.com/api/v2/conversations/couriers-for-conversation');
+  const couriers = list.couriers || [];
+  const match = couriers.find(c => norm(c.courierName) === norm(name))
+    || couriers.find(c => norm(c.courierName).startsWith(norm(name)) || norm(name).startsWith(norm(c.courierName)));
+  if (!match) throw new Error(`Entregador "${name}" não encontrado no chat do Foody.`);
+  const conv = await foodyPost('https://app.foodydelivery.com/api/v2/conversations/create-or-get-conversation', { courierUid: match.courierUid });
+  if (!conv.conversationUid) throw new Error('Não consegui abrir a conversa.');
+  const sent = await foodyPost(`https://app.foodydelivery.com/api/v2/conversations/${conv.conversationUid}/send-message`, { body: message });
+  return { courierName: match.courierName, messageUid: sent.messageUid };
+}
+
 app.post('/api/nudge', async (req, res) => {
   const name    = (req.body.name    || '').trim();
   const message = (req.body.message || '').trim();
-  if (!name || !message)  return res.status(400).json({ ok: false, error: 'Nome e mensagem são obrigatórios.' });
-  if (!config.cookie)     return res.status(400).json({ ok: false, error: 'Sessão do Foody não configurada.' });
-
-  const norm = s => (s || '').trim().toLowerCase();
+  if (!name || !message) return res.status(400).json({ ok: false, error: 'Nome e mensagem são obrigatórios.' });
   try {
-    const list = await foodyFetch('https://app.foodydelivery.com/api/v2/conversations/couriers-for-conversation');
-    const couriers = list.couriers || [];
-    const match = couriers.find(c => norm(c.courierName) === norm(name))
-      || couriers.find(c => norm(c.courierName).startsWith(norm(name)) || norm(name).startsWith(norm(c.courierName)));
-    if (!match) return res.status(404).json({ ok: false, error: `Entregador "${name}" não encontrado no chat do Foody.` });
-
-    const conv = await foodyPost('https://app.foodydelivery.com/api/v2/conversations/create-or-get-conversation', { courierUid: match.courierUid });
-    if (!conv.conversationUid) throw new Error('Não consegui abrir a conversa.');
-
-    const sent = await foodyPost(`https://app.foodydelivery.com/api/v2/conversations/${conv.conversationUid}/send-message`, { body: message });
-    console.log(`[NUDGE] "${message}" → ${match.courierName}`);
-    res.json({ ok: true, courierName: match.courierName, messageUid: sent.messageUid });
+    const r = await sendNudgeMessage(name, message);
+    console.log(`[NUDGE] "${message}" → ${r.courierName}`);
+    res.json({ ok: true, ...r });
   } catch (e) {
     console.error('[NUDGE]', e.message);
     res.status(502).json({ ok: false, error: e.message });
   }
+});
+
+// Liga/desliga da auto-mensagem "App Desconectado" pra quem some (padrão OFF)
+app.post('/api/config/auto-nudge', (req, res) => {
+  if (!hasDataAccess(req)) return res.status(401).json({ ok: false, error: 'sem acesso' });
+  config.autoNudgeMissing = !!req.body.enabled;
+  saveConfig();
+  console.log(`[CONFIG] autoNudgeMissing = ${config.autoNudgeMissing}`);
+  res.json({ ok: true, autoNudgeMissing: config.autoNudgeMissing });
+});
+
+// Cercas virtuais (zonas): ler e salvar. Formato: [{ id, name, polygon: [[lat,lng],...] }]
+app.get('/api/zones', (req, res) => {
+  if (!hasDataAccess(req)) return res.status(401).json({ zones: [] });
+  res.json({ zones: config.zones || [] });
+});
+app.post('/api/zones', (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ ok: false, error: 'só ADM MASTER' });
+  if (!Array.isArray(req.body.zones)) return res.status(400).json({ ok: false, error: 'zones deve ser um array' });
+  config.zones = req.body.zones;
+  saveConfig();
+  console.log(`[CONFIG] zonas = ${config.zones.length}`);
+  res.json({ ok: true, zonesCount: config.zones.length });
 });
 
 // TEMP probe — ver o ciclo de status dos pedidos ao vivo (pra calibrar os alertas)
