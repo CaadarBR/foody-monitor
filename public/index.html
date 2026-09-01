@@ -26,6 +26,19 @@
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
+    /* ── Barra de rolagem fina e discreta (troca a padrão grossa do Chrome) ── */
+    * { scrollbar-width: thin; scrollbar-color: #475569 transparent; }
+    *::-webkit-scrollbar { width: 8px; height: 8px; }
+    *::-webkit-scrollbar-track { background: transparent; }
+    *::-webkit-scrollbar-thumb {
+      background: #475569;
+      border-radius: 8px;
+      border: 2px solid transparent;
+      background-clip: padding-box;
+    }
+    *::-webkit-scrollbar-thumb:hover { background: #64748b; background-clip: padding-box; }
+    *::-webkit-scrollbar-corner { background: transparent; }
+
     body {
       background: var(--bg);
       color: var(--text);
