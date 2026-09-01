@@ -783,6 +783,11 @@ async function doPoll() {
     lastUpdated = Date.now();
     sessionOk   = true;
     consecutiveFailures = 0;
+    // Sessão respondeu de novo → limpa qualquer alerta de cookie/instabilidade que
+    // tenha ficado preso na tela. Se o poll voltou, o cookie está vivo — o card some sozinho.
+    if (activeAlerts.some(a => a.type === 'cookie')) {
+      activeAlerts = activeAlerts.filter(a => a.type !== 'cookie');
+    }
     saveState();
   } catch (e) {
     consecutiveFailures++;
@@ -790,9 +795,10 @@ async function doPoll() {
 
     // Blip isolado (timeout, 5xx momentâneo, JSON quebrado num ciclo) NÃO vira
     // "cookie expirou" — só derruba a sessão se for erro de auth de verdade OU
-    // se falhar 3x seguidas (~30s), aí sim é queda persistente.
+    // se falhar 6x seguidas (~60s), aí sim é queda persistente. (3x era gatilho fácil
+    // demais: o Foody dá blip curto o tempo todo e o card ficava pipocando.)
     const authLikely = isAuthError(e);
-    if (authLikely || consecutiveFailures >= 3) {
+    if (authLikely || consecutiveFailures >= 6) {
       const wasOk = sessionOk;
       sessionOk = false;
       const now = Date.now();

@@ -1121,6 +1121,14 @@ function closeSettings() {
   document.getElementById('settingsModal').classList.remove('open');
 }
 
+// ESC fecha qualquer modal aberto (Configurações, Histórico, Login, Alertar).
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  const open = document.querySelectorAll('.modal-overlay.open');
+  if (!open.length) return;
+  open.forEach(m => m.classList.remove('open'));
+});
+
 async function saveSettings() {
   const cookie         = document.getElementById('cookieInput').value.trim();
   const mins           = parseInt(document.getElementById('alertMinutes').value) || 15;
