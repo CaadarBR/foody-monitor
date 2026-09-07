@@ -66,7 +66,8 @@ function ensureVapidKeys() {
 }
 
 function saveConfig() {
-  try { fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2)); } catch (e) {}
+  try { fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2)); }
+  catch (e) { console.error('[WRITE-FAIL saveConfig]', CONFIG_FILE, e.message); }
 }
 
 loadConfig();
@@ -253,13 +254,20 @@ function zonesContaining(lat, lng) {
   return out;
 }
 
+let lastWriteError = null; // último erro de gravação em logs/ (pra diagnóstico)
+
 function appendLog(entry) {
   const date = operationalDate();
   const file = path.join(LOGS_DIR, `${date}.json`);
   let logs = [];
   try { logs = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) {}
   logs.push({ timestamp: new Date().toISOString(), ...entry });
-  try { fs.writeFileSync(file, JSON.stringify(logs, null, 2)); } catch (e) {}
+  try {
+    fs.writeFileSync(file, JSON.stringify(logs, null, 2));
+  } catch (e) {
+    lastWriteError = { at: new Date().toISOString(), op: 'appendLog', file, msg: e.message };
+    console.error('[WRITE-FAIL appendLog]', file, e.message);
+  }
 }
 
 // ── Foody API ─────────────────────────────────────────────────────────────────
@@ -375,7 +383,7 @@ function saveState() {
       shiftEndAlertedDate,
       savedAt:         Date.now(),
     }));
-  } catch (e) {}
+  } catch (e) { console.error('[WRITE-FAIL saveState]', STATE_FILE, e.message); }
 }
 
 function loadState() {
@@ -1114,6 +1122,37 @@ app.get('/api/logs', (req, res) => {
   } catch (e) {
     res.json({ dates: [] });
   }
+});
+
+// Diagnóstico do armazenamento — por que o histórico não persiste?
+// Testa escrita real em logs/, lista os arquivos e mostra espaço em disco.
+app.get('/api/diag', (req, res) => {
+  if (!hasDataAccess(req)) return res.status(401).json({ error: 'sem acesso' });
+  const out = { logsDir: LOGS_DIR };
+  try { out.exists = fs.existsSync(LOGS_DIR); out.isDir = out.exists && fs.statSync(LOGS_DIR).isDirectory(); }
+  catch (e) { out.statErr = e.message; }
+
+  // Teste de escrita: grava e apaga um arquivo-sonda
+  const probe = path.join(LOGS_DIR, '.write-probe');
+  try { fs.writeFileSync(probe, String(SERVER_STARTED_AT)); fs.unlinkSync(probe); out.writable = true; }
+  catch (e) { out.writable = false; out.writeErr = e.message; }
+
+  try {
+    const all = fs.readdirSync(LOGS_DIR);
+    out.dailyFiles = all.filter(f => /^\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort();
+    out.allFiles   = all;
+  } catch (e) { out.readdirErr = e.message; }
+
+  try { const s = fs.statfsSync(LOGS_DIR); out.diskFreeMB = Math.round(s.bavail * s.bsize / 1048576); out.diskTotalMB = Math.round(s.blocks * s.bsize / 1048576); }
+  catch (e) { out.statfsErr = e.message; }
+
+  out.lastWriteError = lastWriteError;
+  out.sessionOk = sessionOk;
+  out.consecutiveFailures = consecutiveFailures;
+  out.lastUpdated = lastUpdated;
+  out.uptimeMin = Math.floor((Date.now() - SERVER_STARTED_AT) / 60000);
+  out.operationalDate = operationalDate();
+  res.json(out);
 });
 
 // ── Push routes ───────────────────────────────────────────────────────────────
