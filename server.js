@@ -509,8 +509,12 @@ function trackOrderStages(ordersByCourierList) {
       }
       if (!prev.alerted && now - prev.since >= ACCEPT_DELAY_MS) {
         if (o.status === 'dispatched') {
-          const al = addAlert('accept', `${courier} recebeu o #${prev.num} e ainda não aceitou`, courier, { stageSince: prev.since });
-          prev.alerted = true; prev.alertId = al.id;
+          // Só alarma "recebeu e não aceitou" se ele AINDA está na loja. Se o GPS
+          // mostra que já saiu (>raio da loja), ele partiu com o pedido — não alarma.
+          if (!courierDepartedStore(courier)) {
+            const al = addAlert('accept', `${courier} recebeu o #${prev.num} e ainda não aceitou`, courier, { stageSince: prev.since });
+            prev.alerted = true; prev.alertId = al.id;
+          }
         } else if (o.status === 'accepted') {
           // Só é "não saiu" se ele AINDA está na loja. Se o GPS mostra que ele já
           // saiu (>raio da loja), ele partiu de verdade — não alarma (falso positivo).
@@ -866,8 +870,9 @@ function buildHolding() {
   const out = [];
   for (const [uid, s] of orderStageSince) {
     if (s.status === 'dispatched' || s.status === 'accepted') {
-      // Já saiu da loja com o pedido aceito? Então está a caminho, não "segurando".
-      if (s.status === 'accepted' && courierDepartedStore(s.courier)) continue;
+      // Já saiu da loja com o pedido (recebido OU aceito)? Então está a caminho,
+      // não "segurando" — mesmo que não tenha tocado aceitar/sair no app do Foody.
+      if (courierDepartedStore(s.courier)) continue;
       out.push({ uid, courier: s.courier, num: s.num, stage: s.status, since: s.since });
     }
   }
