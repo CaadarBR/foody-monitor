@@ -468,6 +468,20 @@ function orderNumberOf(o) {
   return o.orderNumber ?? o.number ?? o.code ?? o.orderCode ?? o.orderId ?? o.id ?? null;
 }
 
+// O entregador JÁ SAIU da loja? (GPS mais longe que o raio da loja). Serve pra não
+// alarmar "aceitou e não saiu" quando o cara já está na rua entregando — o status do
+// Foody só ficou preso em 'accepted' porque ele não tocou "sair pra entrega" no app.
+function courierDepartedStore(name) {
+  const sc = storeCoords();
+  if (!sc) return false; // sem coord da loja não dá pra afirmar → não suprime (seguro)
+  for (const cs of courierMap.values()) {
+    if (cs.name === name && typeof cs.lat === 'number' && typeof cs.lng === 'number') {
+      return haversineM(cs.lat, cs.lng, sc.lat, sc.lng) > STORE_RADIUS_M;
+    }
+  }
+  return false;
+}
+
 // Vigia quanto tempo cada pedido fica "recebido mas não aceito" (dispatched) e
 // "aceito mas não saiu" (accepted). Passou de ACCEPT_DELAY_MS, alerta uma vez.
 function trackOrderStages(ordersByCourierList) {
@@ -498,8 +512,12 @@ function trackOrderStages(ordersByCourierList) {
           const al = addAlert('accept', `${courier} recebeu o #${prev.num} e ainda não aceitou`, courier, { stageSince: prev.since });
           prev.alerted = true; prev.alertId = al.id;
         } else if (o.status === 'accepted') {
-          const al = addAlert('depart', `${courier} aceitou o #${prev.num} mas ainda não saiu`, courier, { stageSince: prev.since });
-          prev.alerted = true; prev.alertId = al.id;
+          // Só é "não saiu" se ele AINDA está na loja. Se o GPS mostra que ele já
+          // saiu (>raio da loja), ele partiu de verdade — não alarma (falso positivo).
+          if (!courierDepartedStore(courier)) {
+            const al = addAlert('depart', `${courier} aceitou o #${prev.num} mas ainda não saiu`, courier, { stageSince: prev.since });
+            prev.alerted = true; prev.alertId = al.id;
+          }
         }
       }
     }
@@ -848,6 +866,8 @@ function buildHolding() {
   const out = [];
   for (const [uid, s] of orderStageSince) {
     if (s.status === 'dispatched' || s.status === 'accepted') {
+      // Já saiu da loja com o pedido aceito? Então está a caminho, não "segurando".
+      if (s.status === 'accepted' && courierDepartedStore(s.courier)) continue;
       out.push({ uid, courier: s.courier, num: s.num, stage: s.status, since: s.since });
     }
   }
