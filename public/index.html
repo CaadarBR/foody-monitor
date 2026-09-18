@@ -902,7 +902,7 @@ async function reloadLog() {
 
 async function loadLogDates() {
   try {
-    const data  = await fetch('/api/logs').then(r => r.json());
+    const data  = await fetch('/api/logs', { headers: adminPass ? { 'x-admin-password': adminPass } : {} }).then(r => r.json());
     const dates = data.dates || [];
     const sel   = document.getElementById('logDateSel');
     if (dates.length === 0) {
@@ -918,7 +918,7 @@ async function loadLogDates() {
 async function loadLog(date) {
   currentLogDate = date;
   try {
-    const data  = await fetch(`/api/log?date=${date}`).then(r => r.json());
+    const data  = await fetch(`/api/log?date=${date}`, { headers: adminPass ? { 'x-admin-password': adminPass } : {} }).then(r => r.json());
     currentLogs = data.logs || [];
     populateCourierFilter();
     renderLog();

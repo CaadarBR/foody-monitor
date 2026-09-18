@@ -485,6 +485,14 @@ function trackOrderStages(ordersByCourierList) {
         orderStageSince.set(key, { status: o.status, since: now, alerted: false, alertId: null, courier, num: orderNumberOf(o) });
         continue;
       }
+      // Reatribuição com o MESMO status (ex.: dispatched Bruno → dispatched Cesar): o dono
+      // mudou mas o status não. Atualiza o entregador e reinicia o cronômetro desta etapa —
+      // senão o card "segurando pedido" continua no nome do entregador ANTIGO (bug).
+      if (prev.courier !== courier) {
+        resolveStageAlert(prev, now); // fecha o alerta do entregador anterior
+        orderStageSince.set(key, { status: o.status, since: now, alerted: false, alertId: null, courier, num: orderNumberOf(o) });
+        continue;
+      }
       if (!prev.alerted && now - prev.since >= ACCEPT_DELAY_MS) {
         if (o.status === 'dispatched') {
           const al = addAlert('accept', `${courier} recebeu o #${prev.num} e ainda não aceitou`, courier, { stageSince: prev.since });
