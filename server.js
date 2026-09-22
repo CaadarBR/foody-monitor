@@ -247,6 +247,15 @@ function isLateNightBRT() {
   return h >= 3 && h < 8;
 }
 
+// Fim de expediente? Loja fechada (ou madrugada, se não sei o horário) E sem pedido pronto
+// esperando na fila. Nessa janela, quem desconecta está indo embora — não é sumiço a cobrar.
+// Usado pra NÃO mandar auto-mensagem "App Desconectado" pra quem some no fim do turno.
+function isShiftEnding() {
+  const storeOpen   = isStoreOpenNowBRT();
+  const storeClosed = storeOpen === false || (storeOpen === null && isLateNightBRT());
+  return storeClosed && readyOrdersCount === 0;
+}
+
 // ── Loja aberta/fechada (CardápioWeb) ──────────────────────────────────────────
 // Fonte de verdade do horário: GET /api/partner/v1/merchant → opening_hours + custom_dates.
 // Rate limit 5/min, então busco e faço cache (renova a cada 30min).
@@ -864,8 +873,11 @@ function processTracking(trackingList, ordersByCourierList) {
       addAlert('missing', `${cs.name} sumiu do mapa!`, cs.name, { ...coords, ...ctx });
     }
 
-    // Auto-mensagem pro entregador que sumiu — só se "missing" estiver ligada (padrão OFF)
-    maybeAutoMessage('missing', cs.name);
+    // Auto-mensagem pro entregador que sumiu — só se "missing" estiver ligada (padrão OFF).
+    // NÃO envia se for fim de expediente E ele sumiu SEM pedido na mão (foi embora, não é falta).
+    // Se sumiu segurando pedido (dropped), envia mesmo no fim — aí é problema real.
+    const goingHome = held.length === 0 && isShiftEnding();
+    if (!goingHome) maybeAutoMessage('missing', cs.name);
     courierMap.delete(id);
   }
 }
