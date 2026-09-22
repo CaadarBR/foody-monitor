@@ -35,6 +35,20 @@ const DEFAULT_AUTO_MESSAGES = {
   missing:    { label: 'Sumiu / desconectou',   icon: '🚨', text: 'App Desconectado' },
 };
 
+// Botões rápidos do modal "alertar entregador" (atalhos manuais). O ADM pode editar/adicionar/remover.
+const DEFAULT_QUICK_MESSAGES = [
+  { label: 'Pedido pronto',    text: 'Pedido pronto aguardando para entrega' },
+  { label: 'Em atraso',        text: 'Pedido em atraso' },
+  { label: 'Retornar',         text: 'Favor retornar à loja' },
+  { label: 'App desconectado', text: 'App Desconectado' },
+];
+
+// Lista atual de botões rápidos (salva do ADM, ou o padrão).
+function quickMessages() {
+  const q = config.quickMessages;
+  return (Array.isArray(q) && q.length) ? q : DEFAULT_QUICK_MESSAGES;
+}
+
 let config = {
   cookie: '', alertMinutes: 15,
   adminPassword: '',   // senha do ADM MASTER (John) — protege Configurações e libera os dados
@@ -42,6 +56,7 @@ let config = {
   pollIntervalMs: 10000, // de quanto em quanto tempo consulta o Foody
   autoNudgeMissing: false, // legado — hoje mora em autoMessages.missing.auto (mantido pra migração)
   autoMessages: {},     // { [tipo]: { text, auto } } — sobrescreve texto/liga automático das padrão
+  quickMessages: null,  // botões rápidos do modal "alertar entregador" (editáveis) — null = usa DEFAULT_QUICK_MESSAGES
   // Auto-block: passou de X min segurando um pedido sem aceitar → desconecta (força offline no
   // app) por Y min. Ação REAL e agressiva — desligado por padrão, tempos editáveis pelo ADM.
   autoBlock: { enabled: false, thresholdMin: 15, blockMin: 30 },
@@ -66,6 +81,7 @@ function loadConfig() {
       if (saved.pollIntervalMs) config.pollIntervalMs = saved.pollIntervalMs;
       if (typeof saved.autoNudgeMissing === 'boolean') config.autoNudgeMissing = saved.autoNudgeMissing;
       if (saved.autoMessages && typeof saved.autoMessages === 'object') config.autoMessages = saved.autoMessages;
+      if (Array.isArray(saved.quickMessages)) config.quickMessages = saved.quickMessages;
       if (saved.autoBlock && typeof saved.autoBlock === 'object') config.autoBlock = { ...config.autoBlock, ...saved.autoBlock };
       if (Array.isArray(saved.zones)) config.zones = saved.zones;
     } catch (e) {}
@@ -1094,6 +1110,7 @@ function buildStatePayload() {
     autoNudgeMissing: !!(mergedAutoMessages().missing || {}).auto,
     // Textos padrão por tipo — pro modal "alertar entregador" pré-preencher com o que o ADM editou
     nudgeDefaults:    Object.fromEntries(Object.entries(mergedAutoMessages()).map(([k, v]) => [k, v.text])),
+    quickMessages:    quickMessages(), // botões rápidos do modal (editáveis pelo ADM)
     zonesCount:       (config.zones || []).length,
     serverStartedAt:  SERVER_STARTED_AT,
   };
@@ -1186,28 +1203,38 @@ app.post('/api/config/auto-nudge', (req, res) => {
 // Mensagens padrão editáveis + liga/desliga automático (só ADM MASTER)
 app.get('/api/admin/messages', (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'unauthorized' });
-  res.json({ messages: mergedAutoMessages() });
+  res.json({ messages: mergedAutoMessages(), quick: quickMessages() });
 });
 
 app.post('/api/admin/messages', (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ error: 'unauthorized' });
   const incoming = req.body && req.body.messages;
-  if (!incoming || typeof incoming !== 'object') return res.status(400).json({ ok: false, error: 'messages inválido' });
-  const next = {};
-  for (const type of Object.keys(DEFAULT_AUTO_MESSAGES)) {
-    const m = incoming[type];
-    if (!m) continue;
-    next[type] = {
-      text: (typeof m.text === 'string') ? m.text.trim().slice(0, 300) : '',
-      auto: !!m.auto,
-    };
+  if (incoming && typeof incoming === 'object') {
+    const next = {};
+    for (const type of Object.keys(DEFAULT_AUTO_MESSAGES)) {
+      const m = incoming[type];
+      if (!m) continue;
+      next[type] = {
+        text: (typeof m.text === 'string') ? m.text.trim().slice(0, 300) : '',
+        auto: !!m.auto,
+      };
+    }
+    config.autoMessages = next;
+    config.autoNudgeMissing = !!(next.missing && next.missing.auto); // mantém o campo legado em sincronia
   }
-  config.autoMessages = next;
-  config.autoNudgeMissing = !!(next.missing && next.missing.auto); // mantém o campo legado em sincronia
+  // Botões rápidos do modal (lista editável de { label, text })
+  if (Array.isArray(req.body.quick)) {
+    config.quickMessages = req.body.quick
+      .map(q => ({
+        label: String(q.label || '').trim().slice(0, 40),
+        text:  String(q.text  || '').trim().slice(0, 300),
+      }))
+      .filter(q => q.label && q.text);
+  }
   saveConfig();
   const on = Object.entries(mergedAutoMessages()).filter(([, v]) => v.auto).map(([k]) => k);
-  console.log(`[CONFIG] mensagens automáticas ligadas: ${on.join(', ') || 'nenhuma'}`);
-  res.json({ ok: true, messages: mergedAutoMessages() });
+  console.log(`[CONFIG] mensagens automáticas ligadas: ${on.join(', ') || 'nenhuma'} | botões rápidos: ${quickMessages().length}`);
+  res.json({ ok: true, messages: mergedAutoMessages(), quick: quickMessages() });
 });
 
 // Cercas virtuais (zonas): ler e salvar. Formato: [{ id, name, polygon: [[lat,lng],...] }]

@@ -453,6 +453,25 @@
     .cfg-inline { display: flex; gap: 10px; }
     .cfg-inline .form-group { flex: 1; margin-bottom: 0; }
 
+    /* ── Editor de botões rápidos ── */
+    .quickmsg-row { display: flex; gap: 6px; align-items: center; margin-bottom: 7px; }
+    .quickmsg-row .qm-label {
+      flex: 0 0 30%; min-width: 0;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+      color: var(--text); padding: 7px 8px; font-size: 12px; outline: none;
+    }
+    .quickmsg-row .qm-text {
+      flex: 1; min-width: 0;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+      color: var(--text); padding: 7px 8px; font-size: 12px; outline: none;
+    }
+    .quickmsg-row .qm-label:focus, .quickmsg-row .qm-text:focus { border-color: var(--brand); }
+    .quickmsg-row .qm-del {
+      flex-shrink: 0; background: none; border: 1px solid var(--border); color: var(--muted);
+      border-radius: 6px; width: 30px; height: 32px; cursor: pointer; font-size: 14px;
+    }
+    .quickmsg-row .qm-del:hover { color: var(--red); border-color: var(--red); }
+
     .modal-actions {
       display: flex;
       gap: 10px;
@@ -700,6 +719,16 @@
       </div>
 
       <div class="form-group">
+        <label class="form-label">⚡ Botões rápidos (modal "alertar entregador")</label>
+        <div class="help-box" style="margin-bottom:8px;">
+          Atalhos que aparecem no modal quando você manda mensagem na mão. Edite o <b>rótulo</b> (o texto do botão)
+          e a <b>mensagem</b> (o que chega pro entregador). Esses <b>não</b> são automáticos.
+        </div>
+        <div id="quickMsgList"></div>
+        <button type="button" class="btn btn-secondary" style="font-size:12px;padding:7px 12px;margin-top:4px;" onclick="addQuickMsg()">+ Adicionar botão</button>
+      </div>
+
+      <div class="form-group">
         <label class="form-label">⛔ Block automático (desconectar no app)</label>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin-bottom:8px;">
           <input type="checkbox" id="autoBlockEnabled">
@@ -758,12 +787,7 @@
     <div class="form-group">
       <label class="form-label">Mensagem (chega no app do entregador)</label>
       <textarea id="nudgeMessage" style="font-family:inherit;min-height:70px;">Pedido pronto aguardando para entrega</textarea>
-      <div class="nudge-quick">
-        <button type="button" onclick="setNudgeMsg('Pedido pronto aguardando para entrega')">Pedido pronto</button>
-        <button type="button" onclick="setNudgeMsg('Pedido em atraso')">Em atraso</button>
-        <button type="button" onclick="setNudgeMsg('Favor retornar à loja')">Retornar</button>
-        <button type="button" onclick="setNudgeMsg('App Desconectado')">App desconectado</button>
-      </div>
+      <div class="nudge-quick" id="nudgeQuick"></div>
     </div>
     <div id="nudgeFeedback" class="nudge-feedback"></div>
     <div class="modal-actions">
@@ -776,13 +800,35 @@
 <script>
 // ─── Alerta entregador ────────────────────────────────────────────────────────
 let nudgeTarget = null;
+
+// Botões rápidos do modal (editáveis pelo ADM; vêm do servidor via state.quickMessages)
+let quickMessagesList = [
+  { label: 'Pedido pronto',    text: 'Pedido pronto aguardando para entrega' },
+  { label: 'Em atraso',        text: 'Pedido em atraso' },
+  { label: 'Retornar',         text: 'Favor retornar à loja' },
+  { label: 'App desconectado', text: 'App Desconectado' },
+];
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function renderNudgeQuick() {
+  const el = document.getElementById('nudgeQuick');
+  if (!el) return;
+  el.innerHTML = quickMessagesList.map((q, i) =>
+    `<button type="button" onclick="setNudgeMsg(quickMessagesList[${i}].text)">${escapeHtml(q.label)}</button>`
+  ).join('');
+}
+
 function openNudge(btn) {
   nudgeTarget = btn.getAttribute('data-name');
-  const def = btn.getAttribute('data-default') || 'Pedido pronto aguardando para entrega';
+  const def = btn.getAttribute('data-default') || (quickMessagesList[0] && quickMessagesList[0].text) || 'Pedido pronto aguardando para entrega';
   document.getElementById('nudgeName').textContent = nudgeTarget;
   document.getElementById('nudgeFeedback').textContent = '';
   document.getElementById('nudgeFeedback').className = 'nudge-feedback';
   document.getElementById('nudgeMessage').value = def;
+  renderNudgeQuick();
   document.getElementById('nudgeModal').classList.add('open');
 }
 function closeNudge() {
@@ -878,6 +924,7 @@ function applyState(state) {
   readyOrdersCount  = state.readyOrdersCount;
   // Textos padrão editados pelo ADM alimentam o modal "alertar entregador"
   if (state.nudgeDefaults) Object.assign(NUDGE_DEFAULTS, state.nudgeDefaults);
+  if (Array.isArray(state.quickMessages) && state.quickMessages.length) quickMessagesList = state.quickMessages;
   document.getElementById('idleBanner').style.display = state.shiftIdle ? 'flex' : 'none';
   // Encerrando só aparece se ainda NÃO encerrou de vez (senão mostra os dois)
   document.getElementById('closingBanner').style.display = (state.shiftClosing && !state.shiftIdle) ? 'flex' : 'none';
@@ -1218,6 +1265,33 @@ function collectAutoMessages() {
   return out;
 }
 
+// ─── Botões rápidos (editáveis) ──────────────────────────────────────────────
+function quickMsgRowHtml(q) {
+  return `<div class="quickmsg-row">
+    <input class="qm-label" maxlength="40"  placeholder="Rótulo"   value="${escapeHtml(q.label || '')}">
+    <input class="qm-text"  maxlength="300" placeholder="Mensagem" value="${escapeHtml(q.text || '')}">
+    <button type="button" class="qm-del" title="Remover" onclick="this.closest('.quickmsg-row').remove()">✕</button>
+  </div>`;
+}
+
+function renderQuickMessages(list) {
+  document.getElementById('quickMsgList').innerHTML = (list || []).map(quickMsgRowHtml).join('');
+}
+
+function addQuickMsg() {
+  document.getElementById('quickMsgList').insertAdjacentHTML('beforeend', quickMsgRowHtml({ label: '', text: '' }));
+}
+
+function collectQuickMessages() {
+  const out = [];
+  document.querySelectorAll('#quickMsgList .quickmsg-row').forEach(row => {
+    const label = row.querySelector('.qm-label').value.trim();
+    const text  = row.querySelector('.qm-text').value.trim();
+    if (label && text) out.push({ label, text });
+  });
+  return out;
+}
+
 async function loadAdminExtras() {
   const headers = { 'x-admin-password': adminPass };
 
@@ -1236,6 +1310,7 @@ async function loadAdminExtras() {
 
   const msgs = await fetch('/api/admin/messages', { headers }).then(r => r.json()).catch(() => null);
   if (msgs && msgs.messages) renderAutoMessages(msgs.messages);
+  if (msgs && msgs.quick) { quickMessagesList = msgs.quick; renderQuickMessages(msgs.quick); }
 
   const data = await fetch('/api/admin/visits', { headers }).then(r => r.json()).catch(() => null);
   const list = document.getElementById('visitsList');
@@ -1284,6 +1359,7 @@ async function saveSettings() {
   }
 
   const messages = collectAutoMessages();
+  const quick = collectQuickMessages();
   const autoBlock = {
     enabled:      document.getElementById('autoBlockEnabled').checked,
     thresholdMin: Math.max(1, parseInt(document.getElementById('autoBlockThreshold').value) || 15),
@@ -1314,8 +1390,9 @@ async function saveSettings() {
   await Promise.all([
     fetch('/config', { method: 'POST', headers, body: JSON.stringify(body) }),
     fetch('/api/admin/access', { method: 'POST', headers, body: JSON.stringify({ allowedIps, pollIntervalMs, autoBlock, autoDispatch }) }),
-    fetch('/api/admin/messages', { method: 'POST', headers, body: JSON.stringify({ messages }) }),
+    fetch('/api/admin/messages', { method: 'POST', headers, body: JSON.stringify({ messages, quick }) }),
   ]);
+  quickMessagesList = quick.length ? quick : quickMessagesList;
 
   alertMinutes = mins;
 
