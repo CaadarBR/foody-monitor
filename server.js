@@ -24,12 +24,30 @@ if (!fs.existsSync(LOGS_DIR)) fs.mkdirSync(LOGS_DIR);
 
 const CONFIG_FILE = path.join(LOGS_DIR, 'config.json');
 
+// Mensagens padrão editáveis, uma por tipo de alerta. label/icon são fixos no código;
+// o ADM MASTER edita só { text, auto }. 'auto' = manda sozinha no chat do Foody quando
+// o alerta dispara. TUDO desligado por padrão — envia mensagem REAL pro entregador.
+const DEFAULT_AUTO_MESSAGES = {
+  slow:       { label: 'Demora no retorno',     icon: '⚠️', text: 'Pedido pronto aguardando para entrega' },
+  accept:     { label: 'Demora pra aceitar',    icon: '⏳', text: 'Favor aceitar o pedido' },
+  depart:     { label: 'Demora pra sair',       icon: '⏳', text: 'Favor sair para entrega' },
+  stationary: { label: 'Parado no mesmo local', icon: '⏸️', text: 'Está tudo certo? Notamos uma parada mais longa.' },
+  missing:    { label: 'Sumiu / desconectou',   icon: '🚨', text: 'App Desconectado' },
+};
+
 let config = {
   cookie: '', alertMinutes: 15,
   adminPassword: '',   // senha do ADM MASTER (John) — protege Configurações e libera os dados
   allowedIps: [],       // IPs liberados a ver os dados sem precisar logar como ADM
   pollIntervalMs: 10000, // de quanto em quanto tempo consulta o Foody
-  autoNudgeMissing: false, // manda "App Desconectado" automático pra quem some (padrão DESLIGADO)
+  autoNudgeMissing: false, // legado — hoje mora em autoMessages.missing.auto (mantido pra migração)
+  autoMessages: {},     // { [tipo]: { text, auto } } — sobrescreve texto/liga automático das padrão
+  // Auto-block: passou de X min segurando um pedido sem aceitar → desconecta (força offline no
+  // app) por Y min. Ação REAL e agressiva — desligado por padrão, tempos editáveis pelo ADM.
+  autoBlock: { enabled: false, thresholdMin: 15, blockMin: 30 },
+  // Pedidos por entregador dinâmico: com pouco pedido pra muito entregador, baixa o limite pra
+  // espalhar melhor. Regra: ceil(prontos ÷ disponíveis), travado entre 1 e max. Desligado por padrão.
+  autoDispatch: { enabled: false, max: 4 },
   zones: [],            // cercas virtuais: [{ id, name, polygon: [[lat,lng],...] }]
 };
 
@@ -47,9 +65,49 @@ function loadConfig() {
       if (Array.isArray(saved.allowedIps)) config.allowedIps = saved.allowedIps;
       if (saved.pollIntervalMs) config.pollIntervalMs = saved.pollIntervalMs;
       if (typeof saved.autoNudgeMissing === 'boolean') config.autoNudgeMissing = saved.autoNudgeMissing;
+      if (saved.autoMessages && typeof saved.autoMessages === 'object') config.autoMessages = saved.autoMessages;
+      if (saved.autoBlock && typeof saved.autoBlock === 'object') config.autoBlock = { ...config.autoBlock, ...saved.autoBlock };
       if (Array.isArray(saved.zones)) config.zones = saved.zones;
     } catch (e) {}
   }
+  // Migra a config antiga (só "App Desconectado" pra quem some) pro novo formato de mensagens
+  if (config.autoNudgeMissing && !(config.autoMessages && config.autoMessages.missing)) {
+    config.autoMessages = { ...(config.autoMessages || {}), missing: { auto: true } };
+  }
+}
+
+// Junta os padrões fixos (label/ícone/texto) com o que o ADM salvou (texto + auto).
+function mergedAutoMessages() {
+  const saved = config.autoMessages || {};
+  const out = {};
+  for (const [type, def] of Object.entries(DEFAULT_AUTO_MESSAGES)) {
+    const s = saved[type] || {};
+    out[type] = {
+      label: def.label,
+      icon:  def.icon,
+      text:  (typeof s.text === 'string' && s.text.trim()) ? s.text : def.text,
+      auto:  !!s.auto,
+    };
+  }
+  return out;
+}
+
+// Texto da mensagem automática pra um tipo de alerta, ou null se não estiver ligada.
+function autoMsg(type) {
+  const m = mergedAutoMessages()[type];
+  return (m && m.auto && m.text) ? m.text : null;
+}
+
+// Dispara a mensagem automática (se ligada) pro entregador no chat do Foody. Loga o envio.
+function maybeAutoMessage(type, courierName) {
+  const text = autoMsg(type);
+  if (!text || !courierName) return;
+  sendNudgeMessage(courierName, text)
+    .then(r => {
+      appendLog({ type: 'auto_nudge', courierName: r.courierName, msg: text, alertType: type });
+      console.log(`[AUTO-MSG:${type}] → ${r.courierName}: ${text}`);
+    })
+    .catch(e => console.error(`[AUTO-MSG:${type}]`, e.message));
 }
 
 function ensureVapidKeys() {
@@ -338,6 +396,42 @@ async function foodyPost(url, body) {
   }
 }
 
+// POST form-urlencoded no Foody (a config de despacho usa esse formato, não JSON).
+async function foodyPostForm(url, formObj) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  try {
+    const body = Object.entries(formObj)
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&');
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { ...foodyHeaders(), 'content-type': 'application/x-www-form-urlencoded' },
+      body,
+      signal: controller.signal,
+    });
+    const text = await r.text();
+    if (!r.ok) throw new Error(`HTTP ${r.status}: ${text.slice(0, 200)}`);
+    try { return text ? JSON.parse(text) : {}; } catch (e) { return {}; }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// Lista as conexões de entregador (id Foody + status connected/inactive). Array ou {couriers:[]}.
+async function listCourierConnections() {
+  const r = await foodyFetch('https://app.foodydelivery.com/api/v2/courier/list-courier-connections');
+  return Array.isArray(r) ? r : (r.couriers || r.courierConnections || []);
+}
+
+// Acha a conexão do entregador pelo nome (match tolerante, igual ao do chat).
+async function findCourierConnection(name) {
+  const norm = s => (s || '').trim().toLowerCase();
+  const arr = await listCourierConnections();
+  return arr.find(c => norm(c.courierName) === norm(name))
+    || arr.find(c => norm(c.courierName).startsWith(norm(name)) || norm(name).startsWith(norm(c.courierName)))
+    || null;
+}
+
 // ── Estado do monitor ─────────────────────────────────────────────────────────
 
 const courierMap = new Map();
@@ -449,6 +543,8 @@ function addAlert(type, msg, courierName = null, extra = {}) {
       : type === 'shiftEnd'  ? '🌙 Expediente encerrado'
       : type === 'accept'    ? '⏳ Demora pra aceitar'
       : type === 'depart'    ? '⏳ Demora pra sair'
+      : type === 'block'     ? '⛔ Entregador desconectado'
+      : type === 'unblock'   ? '✅ Entregador reconectado'
       : '⚠️ Demora no retorno',
     body: msg,
     tag: `${type}-${courierName || Date.now()}`,
@@ -514,6 +610,7 @@ function trackOrderStages(ordersByCourierList) {
           if (!courierDepartedStore(courier)) {
             const al = addAlert('accept', `${courier} recebeu o #${prev.num} e ainda não aceitou`, courier, { stageSince: prev.since });
             prev.alerted = true; prev.alertId = al.id;
+            maybeAutoMessage('accept', courier);
           }
         } else if (o.status === 'accepted') {
           // Só é "não saiu" se ele AINDA está na loja. Se o GPS mostra que ele já
@@ -521,8 +618,20 @@ function trackOrderStages(ordersByCourierList) {
           if (!courierDepartedStore(courier)) {
             const al = addAlert('depart', `${courier} aceitou o #${prev.num} mas ainda não saiu`, courier, { stageSince: prev.since });
             prev.alerted = true; prev.alertId = al.id;
+            maybeAutoMessage('depart', courier);
           }
         }
+      }
+
+      // Auto-block: segurou 'dispatched' (recebeu e não aceitou) além do limite → desconecta.
+      // Mesma trava de GPS dos alertas: se o cara já saiu da loja (está na rua entregando),
+      // NÃO bloqueia — o status só ficou preso em 'dispatched' porque ele não tocou "aceitar".
+      const ab = config.autoBlock || {};
+      if (ab.enabled && o.status === 'dispatched' && !prev.blocked &&
+          now - prev.since >= (ab.thresholdMin || 15) * 60000 &&
+          !courierDepartedStore(courier)) {
+        prev.blocked = true;
+        blockCourier(courier, ab.blockMin || 30).catch(e => console.error('[BLOCK]', e.message));
       }
     }
   }
@@ -644,6 +753,7 @@ function processTracking(trackingList, ordersByCourierList) {
         if (!atStore) {
           const al = addAlert('stationary', `${cs.name} parado no mesmo local há 10min`, cs.name, { lat: clat, lng: clng, stageSince: cs.stSince });
           cs.stAlerted = true; cs.stAlertId = al.id;
+          maybeAutoMessage('stationary', cs.name);
         }
       }
 
@@ -689,6 +799,7 @@ function processTracking(trackingList, ordersByCourierList) {
               cs.alerted = true;
               const ord = cs.lastOrderNumber ? `o #${cs.lastOrderNumber} ` : '';
               addAlert('slow', `${cs.name} terminou ${ord}há ${Math.floor(elapsed)}min e tem pedido esperando!`, cs.name);
+              maybeAutoMessage('slow', cs.name);
             }
           } else if (elapsed >= config.alertMinutes * 0.65) {
             if (cs.status !== 'alert') cs.status = 'warning';
@@ -737,13 +848,97 @@ function processTracking(trackingList, ordersByCourierList) {
       addAlert('missing', `${cs.name} sumiu do mapa!`, cs.name, { ...coords, ...ctx });
     }
 
-    // Auto-mensagem pro entregador que sumiu — só se o liga/desliga estiver LIGADO (padrão OFF)
-    if (config.autoNudgeMissing) {
-      sendNudgeMessage(cs.name, 'App Desconectado')
-        .then(r => { appendLog({ type: 'auto_nudge', courierName: r.courierName, msg: 'App Desconectado' }); console.log(`[AUTO-NUDGE] → ${r.courierName}`); })
-        .catch(e => console.error('[AUTO-NUDGE]', e.message));
-    }
+    // Auto-mensagem pro entregador que sumiu — só se "missing" estiver ligada (padrão OFF)
+    maybeAutoMessage('missing', cs.name);
     courierMap.delete(id);
+  }
+}
+
+// ── Auto-block (desconectar/forçar offline no app) ─────────────────────────────
+// Foody usa um TOGGLE cego (connected ⇄ inactive). Pra bloquear com segurança: leio o
+// status primeiro e só desligo quem está 'connected'. Reativo (toggle de volta) ao fim.
+const blockedCouriers = new Map(); // foodyId -> { name, unblockAt }
+const blockingNames   = new Set(); // trava anti-corrida (mesmo entregador, 2 pedidos)
+
+function isBlockedName(name) {
+  return [...blockedCouriers.values()].some(b => b.name === name);
+}
+
+async function blockCourier(name, minutes) {
+  if (blockingNames.has(name) || isBlockedName(name)) return;
+  blockingNames.add(name);
+  try {
+    const c = await findCourierConnection(name);
+    if (!c || c.id == null) { console.error(`[BLOCK] "${name}" não achado em list-courier-connections`); return; }
+    if (c.status !== 'connected') { console.log(`[BLOCK] ${name} já está ${c.status} — não bloqueio`); return; }
+    await foodyPost(`https://app.foodydelivery.com/api/v2/courier/toggle/${c.id}`, {});
+    blockedCouriers.set(c.id, { name: c.courierName, unblockAt: Date.now() + minutes * 60000 });
+    appendLog({ type: 'auto_block', courierName: c.courierName, blockMin: minutes });
+    addAlert('block', `${c.courierName} desconectado por ${minutes}min — segurou pedido sem aceitar`, c.courierName);
+    console.log(`[BLOCK] ${c.courierName} desconectado por ${minutes}min`);
+  } catch (e) {
+    console.error('[BLOCK]', e.message);
+  } finally {
+    blockingNames.delete(name);
+  }
+}
+
+// Reativa quem já cumpriu o tempo de block (toggle de volta só se estiver 'inactive').
+async function processBlockUnblocks() {
+  const now = Date.now();
+  const due = [...blockedCouriers].filter(([, b]) => now >= b.unblockAt);
+  if (!due.length) return;
+  let arr = [];
+  try { arr = await listCourierConnections(); } catch (e) { console.error('[UNBLOCK]', e.message); return; }
+  for (const [id, b] of due) {
+    try {
+      const c = arr.find(x => x.id === id);
+      if (c && c.status === 'inactive') {
+        await foodyPost(`https://app.foodydelivery.com/api/v2/courier/toggle/${id}`, {});
+        appendLog({ type: 'auto_unblock', courierName: b.name });
+        addAlert('unblock', `${b.name} reconectado — fim do block`, b.name);
+        console.log(`[UNBLOCK] ${b.name} reconectado`);
+      }
+      blockedCouriers.delete(id);
+    } catch (e) { console.error('[UNBLOCK]', e.message); }
+  }
+}
+
+// ── Pedidos por entregador dinâmico (config de despacho) ───────────────────────
+// Regra do John: maxOrdersPerCourier = ceil(prontos ÷ entregadores disponíveis), travado
+// entre 1 e o teto (padrão 4). Trava: só grava quando o número muda (não martela a API).
+// Reenvia o conjunto completo de config (capturado da Varanda's); muda só o max.
+const AUTODESPATCH_DEFAULTS = {
+  active: true,
+  distributionMethod: 'courier_queue',
+  maxOrdersPerCourier: 3,
+  groupByTimeMinutes: 30,
+  groupByKms: 2,
+  groupCollectionsByKms: 2,
+  activeGroupByGeometricRoute: true,
+  geometricRouteWidthInMeters: 1000,
+  bikeMaxDistanceKms: 1.5,
+  eligibleDistanceToReceiveOrderKms: 1,
+  timeToAccept: 0,
+};
+let lastMaxOrdersSet = null;
+
+async function applyAutoDispatch() {
+  const ad = config.autoDispatch || {};
+  if (!ad.enabled) return;
+  const available = courierMap.size; // entregadores online neste ciclo
+  if (available <= 0) return;
+  const cap     = Math.max(1, Math.min(4, parseInt(ad.max) || 4));
+  const desired = Math.max(1, Math.min(cap, Math.ceil(readyOrdersCount / available)));
+  if (desired === lastMaxOrdersSet) return; // só grava quando muda
+  const payload = { ...AUTODESPATCH_DEFAULTS, ...(ad.template || {}), maxOrdersPerCourier: desired };
+  try {
+    await foodyPostForm('https://app.foodydelivery.com/api/company/autodespatch/config', payload);
+    lastMaxOrdersSet = desired;
+    appendLog({ type: 'auto_dispatch', maxOrdersPerCourier: desired, available, ready: readyOrdersCount });
+    console.log(`[AUTO-DISPATCH] maxOrdersPerCourier = ${desired} (prontos ${readyOrdersCount} ÷ ${available} disp.)`);
+  } catch (e) {
+    console.error('[AUTO-DISPATCH]', e.message);
   }
 }
 
@@ -796,6 +991,10 @@ async function doPoll() {
     trackOrderStages(orders.ordersByCourier || []);
     trackReassignments(orders.ordersByCourier || [], Date.now());
     processTracking(tracking.couriers, orders.ordersByCourier || []);
+
+    // Motores de ação (só agem se ligados no ADM; senão retornam na hora):
+    applyAutoDispatch().catch(e => console.error('[AUTO-DISPATCH]', e.message));
+    if (blockedCouriers.size) processBlockUnblocks().catch(e => console.error('[UNBLOCK]', e.message));
 
     await refreshMerchant();
     const storeOpen   = isStoreOpenNowBRT();
@@ -892,7 +1091,9 @@ function buildStatePayload() {
     couriers:         [...courierMap.values()],
     alerts:           activeAlerts,
     holding:          buildHolding(),
-    autoNudgeMissing: !!config.autoNudgeMissing,
+    autoNudgeMissing: !!(mergedAutoMessages().missing || {}).auto,
+    // Textos padrão por tipo — pro modal "alertar entregador" pré-preencher com o que o ADM editou
+    nudgeDefaults:    Object.fromEntries(Object.entries(mergedAutoMessages()).map(([k, v]) => [k, v.text])),
     zonesCount:       (config.zones || []).length,
     serverStartedAt:  SERVER_STARTED_AT,
   };
@@ -970,13 +1171,43 @@ app.post('/api/nudge', async (req, res) => {
   }
 });
 
-// Liga/desliga da auto-mensagem "App Desconectado" pra quem some (padrão OFF)
+// Liga/desliga da auto-mensagem "App Desconectado" pra quem some (compat com clientes antigos;
+// hoje mora em autoMessages.missing.auto — ver /api/admin/messages)
 app.post('/api/config/auto-nudge', (req, res) => {
-  if (!hasDataAccess(req)) return res.status(401).json({ ok: false, error: 'sem acesso' });
-  config.autoNudgeMissing = !!req.body.enabled;
+  if (!isAdmin(req)) return res.status(401).json({ ok: false, error: 'só ADM MASTER' });
+  const enabled = !!req.body.enabled;
+  config.autoMessages = { ...(config.autoMessages || {}), missing: { ...(config.autoMessages?.missing || {}), auto: enabled } };
+  config.autoNudgeMissing = enabled;
   saveConfig();
-  console.log(`[CONFIG] autoNudgeMissing = ${config.autoNudgeMissing}`);
-  res.json({ ok: true, autoNudgeMissing: config.autoNudgeMissing });
+  console.log(`[CONFIG] autoMessages.missing.auto = ${enabled}`);
+  res.json({ ok: true, autoNudgeMissing: enabled });
+});
+
+// Mensagens padrão editáveis + liga/desliga automático (só ADM MASTER)
+app.get('/api/admin/messages', (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ error: 'unauthorized' });
+  res.json({ messages: mergedAutoMessages() });
+});
+
+app.post('/api/admin/messages', (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ error: 'unauthorized' });
+  const incoming = req.body && req.body.messages;
+  if (!incoming || typeof incoming !== 'object') return res.status(400).json({ ok: false, error: 'messages inválido' });
+  const next = {};
+  for (const type of Object.keys(DEFAULT_AUTO_MESSAGES)) {
+    const m = incoming[type];
+    if (!m) continue;
+    next[type] = {
+      text: (typeof m.text === 'string') ? m.text.trim().slice(0, 300) : '',
+      auto: !!m.auto,
+    };
+  }
+  config.autoMessages = next;
+  config.autoNudgeMissing = !!(next.missing && next.missing.auto); // mantém o campo legado em sincronia
+  saveConfig();
+  const on = Object.entries(mergedAutoMessages()).filter(([, v]) => v.auto).map(([k]) => k);
+  console.log(`[CONFIG] mensagens automáticas ligadas: ${on.join(', ') || 'nenhuma'}`);
+  res.json({ ok: true, messages: mergedAutoMessages() });
 });
 
 // Cercas virtuais (zonas): ler e salvar. Formato: [{ id, name, polygon: [[lat,lng],...] }]
@@ -1083,6 +1314,8 @@ app.get('/api/admin/access', (req, res) => {
   res.json({
     allowedIps:     config.allowedIps || [],
     pollIntervalMs: config.pollIntervalMs || 10000,
+    autoBlock:      config.autoBlock || { enabled: false, thresholdMin: 15, blockMin: 30 },
+    autoDispatch:   config.autoDispatch || { enabled: false, max: 4 },
   });
 });
 
@@ -1093,6 +1326,23 @@ app.post('/api/admin/access', (req, res) => {
   }
   if (req.body.pollIntervalMs) {
     config.pollIntervalMs = Math.max(200, parseInt(req.body.pollIntervalMs) || 10000);
+  }
+  if (req.body.autoBlock && typeof req.body.autoBlock === 'object') {
+    const b = req.body.autoBlock;
+    config.autoBlock = {
+      enabled:      !!b.enabled,
+      thresholdMin: Math.max(1, Math.min(120, parseInt(b.thresholdMin) || 15)),
+      blockMin:     Math.max(1, Math.min(240, parseInt(b.blockMin) || 30)),
+    };
+  }
+  if (req.body.autoDispatch && typeof req.body.autoDispatch === 'object') {
+    const d = req.body.autoDispatch;
+    config.autoDispatch = {
+      ...config.autoDispatch,
+      enabled: !!d.enabled,
+      max:     Math.max(1, Math.min(4, parseInt(d.max) || 4)),
+    };
+    lastMaxOrdersSet = null; // força reavaliar o número na próxima volta do poll
   }
   saveConfig();
   res.json({ ok: true });

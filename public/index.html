@@ -421,6 +421,38 @@
     }
     .help-box b { color: var(--text); }
 
+    /* ── Editor de mensagens padrão/automáticas ── */
+    .automsg-row {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 9px 10px;
+      margin-bottom: 8px;
+    }
+    .automsg-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; gap: 10px; }
+    .automsg-label { font-size: 12px; font-weight: 700; color: var(--text); }
+    .automsg-auto {
+      display: flex; align-items: center; gap: 5px;
+      font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+      color: var(--muted); cursor: pointer; user-select: none; white-space: nowrap;
+    }
+    .automsg-auto input { accent-color: var(--brand); width: 15px; height: 15px; }
+    .automsg-row.on { border-color: rgba(255,107,53,0.55); background: rgba(255,107,53,0.06); }
+    .automsg-row.on .automsg-auto { color: var(--brand); }
+    .automsg-text {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 7px 9px;
+      font-size: 12.5px;
+      outline: none;
+    }
+    .automsg-text:focus { border-color: var(--brand); }
+    .cfg-inline { display: flex; gap: 10px; }
+    .cfg-inline .form-group { flex: 1; margin-bottom: 0; }
+
     .modal-actions {
       display: flex;
       gap: 10px;
@@ -593,6 +625,8 @@
         <option value="stationary">⏸️ Parado no mesmo local</option>
         <option value="zone">📍 Zona (entrou/saiu)</option>
         <option value="single">✅ Saiu com 1 pedido</option>
+        <option value="block">⛔ Desconectado (block)</option>
+        <option value="unblock">✅ Reconectado (fim block)</option>
         <option value="cookie">🍪 Cookie expirado</option>
         <option value="shiftEnd">🌙 Expediente encerrado</option>
       </select>
@@ -656,12 +690,52 @@
       </div>
 
       <div class="form-group">
-        <label class="form-label">🤖 Auto-mensagem pra quem some</label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
-          <input type="checkbox" id="autoNudgeToggle" onchange="toggleAutoNudge(this.checked)">
-          Enviar <b>"App Desconectado"</b> automático quando alguém sumir do mapa
+        <label class="form-label">💬 Mensagens padrão / automáticas</label>
+        <div class="help-box" style="margin-bottom:8px;">
+          Edite o texto de cada mensagem. Marque <b>“auto”</b> pra ela ser enviada <b>sozinha</b>
+          no chat do Foody quando o alerta disparar. ⚠️ É mensagem <b>REAL</b> pro entregador —
+          deixe o auto <b>desligado</b> fora dos momentos em que quiser cobrar. Padrão: todas desligadas.
+        </div>
+        <div id="autoMsgList"></div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">⛔ Block automático (desconectar no app)</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin-bottom:8px;">
+          <input type="checkbox" id="autoBlockEnabled">
+          Desconectar (forçar <b>offline</b> no app) quem segurar um pedido sem aceitar por muito tempo
         </label>
-        <div class="help-box">⚠️ Manda mensagem <b>REAL</b> pro entregador no chat do Foody. Deixe <b>desligado</b> fora dos momentos em que quiser cobrar. Padrão: desligado.</div>
+        <div class="cfg-inline">
+          <div class="form-group">
+            <label class="form-label">Aciona após (min)</label>
+            <input type="number" id="autoBlockThreshold" value="15" min="1" max="120">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Tempo de block (min)</label>
+            <input type="number" id="autoBlockMinutes" value="30" min="1" max="240">
+          </div>
+        </div>
+        <div class="help-box" style="margin-top:8px;">
+          ⚠️ Ação <b>REAL e agressiva</b>: o entregador fica <b>offline forçado</b> no app pelo tempo de block,
+          mesmo estando online, e não recebe pedidos nesse período. Padrão: <b>desligado</b>.
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">🔀 Pedidos por entregador (dinâmico)</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin-bottom:8px;">
+          <input type="checkbox" id="autoDispatchEnabled">
+          Ajustar sozinho o <b>máx. de pedidos por entregador</b> conforme o movimento
+        </label>
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label">Teto no pico (máx.)</label>
+          <input type="number" id="autoDispatchMax" value="4" min="1" max="4">
+        </div>
+        <div class="help-box" style="margin-top:8px;">
+          Regra: <b>máx = prontos ÷ entregadores disponíveis</b> (arredonda pra cima), travado entre <b>1</b> e o teto.
+          Pouco pedido pra muita gente → cai pra 1 (espalha). Muda a config de despacho da loja no Foody.
+          Só grava quando o número muda. Padrão: <b>desligado</b>.
+        </div>
       </div>
 
       <div class="form-group">
@@ -802,6 +876,8 @@ function applyState(state) {
   alertMinutes      = state.alertMinutes;
   autoNudgeMissing  = !!state.autoNudgeMissing;
   readyOrdersCount  = state.readyOrdersCount;
+  // Textos padrão editados pelo ADM alimentam o modal "alertar entregador"
+  if (state.nudgeDefaults) Object.assign(NUDGE_DEFAULTS, state.nudgeDefaults);
   document.getElementById('idleBanner').style.display = state.shiftIdle ? 'flex' : 'none';
   // Encerrando só aparece se ainda NÃO encerrou de vez (senão mostra os dois)
   document.getElementById('closingBanner').style.display = (state.shiftClosing && !state.shiftIdle) ? 'flex' : 'none';
@@ -993,14 +1069,38 @@ function renderLog() {
         <span>${e.courierName}: ${STATUS_PT[e.from] || e.from} → ${STATUS_PT[e.to] || e.to}</span>
       </div>`;
 
+    if (e.type === 'auto_nudge') return `
+      <div class="log-entry log-info">
+        <span class="log-time">${time}</span><span>🤖</span>
+        <span>Auto-mensagem → ${e.courierName}: "${e.msg}"</span>
+      </div>`;
+
+    if (e.type === 'auto_block') return `
+      <div class="log-entry log-danger">
+        <span class="log-time">${time}</span><span>⛔</span>
+        <span>Auto-block: ${e.courierName} desconectado por ${e.blockMin}min</span>
+      </div>`;
+
+    if (e.type === 'auto_unblock') return `
+      <div class="log-entry log-success">
+        <span class="log-time">${time}</span><span>✅</span>
+        <span>${e.courierName} reconectado (fim do block)</span>
+      </div>`;
+
+    if (e.type === 'auto_dispatch') return `
+      <div class="log-entry log-info">
+        <span class="log-time">${time}</span><span>🔀</span>
+        <span>Pedidos por entregador → ${e.maxOrdersPerCourier} (${e.ready} prontos ÷ ${e.available} disp.)</span>
+      </div>`;
+
     if (e.type === 'alert') {
       const loc = (e.lat && e.lng)
         ? ` <a class="coord-link" href="https://www.google.com/maps?q=${e.lat},${e.lng}" target="_blank" rel="noopener" title="Abrir no Google Maps">${e.lat}, ${e.lng}</a>`
         : '';
       const nul = e.gpsNull ? ` <span class="gps-null">null</span>` : '';
-      const ico = e.alertType === 'missing' ? '🚨' : e.alertType === 'dropped' ? '🚨' : e.alertType === 'reassigned' ? '🔁' : e.alertType === 'stationary' ? '⏸️' : e.alertType === 'zone' ? '📍' : e.alertType === 'cookie' ? '🍪' : e.alertType === 'single' ? '✅' : (e.alertType === 'accept' || e.alertType === 'depart') ? '⏳' : '⚠️';
+      const ico = e.alertType === 'missing' ? '🚨' : e.alertType === 'dropped' ? '🚨' : e.alertType === 'reassigned' ? '🔁' : e.alertType === 'stationary' ? '⏸️' : e.alertType === 'zone' ? '📍' : e.alertType === 'cookie' ? '🍪' : e.alertType === 'single' ? '✅' : e.alertType === 'block' ? '⛔' : e.alertType === 'unblock' ? '✅' : (e.alertType === 'accept' || e.alertType === 'depart') ? '⏳' : '⚠️';
       return `
-      <div class="log-entry ${e.alertType === 'single' ? 'log-success' : 'log-danger'}">
+      <div class="log-entry ${e.alertType === 'single' || e.alertType === 'unblock' ? 'log-success' : 'log-danger'}">
         <span class="log-time">${time}</span><span>${ico}</span>
         <span>${e.msg}${loc}${nul}</span>
       </div>`;
@@ -1083,23 +1183,39 @@ async function renderSettingsGate() {
   document.getElementById('adminContent').style.display  = isAdminUnlocked ? 'block' : 'none';
   if (isAdminUnlocked) {
     document.getElementById('alertMinutes').value = alertMinutes;
-    document.getElementById('autoNudgeToggle').checked = autoNudgeMissing;
     await loadAdminExtras();
   }
 }
 
-async function toggleAutoNudge(enabled) {
-  try {
-    const r = await fetch('/api/config/auto-nudge', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-admin-password': adminPass },
-      body: JSON.stringify({ enabled }),
-    }).then(r => r.json());
-    if (r.ok) autoNudgeMissing = r.autoNudgeMissing;
-    else document.getElementById('autoNudgeToggle').checked = autoNudgeMissing; // reverte se falhou
-  } catch (e) {
-    document.getElementById('autoNudgeToggle').checked = autoNudgeMissing;
-  }
+// ─── Mensagens padrão / automáticas ──────────────────────────────────────────
+let autoMessagesCache = {};
+
+function renderAutoMessages(messages) {
+  autoMessagesCache = messages || {};
+  const el = document.getElementById('autoMsgList');
+  el.innerHTML = Object.entries(autoMessagesCache).map(([type, m]) => `
+    <div class="automsg-row ${m.auto ? 'on' : ''}" data-type="${type}">
+      <div class="automsg-head">
+        <span class="automsg-label">${m.icon || ''} ${m.label || type}</span>
+        <label class="automsg-auto">
+          <input type="checkbox" class="automsg-toggle" ${m.auto ? 'checked' : ''}
+            onchange="this.closest('.automsg-row').classList.toggle('on', this.checked)">
+          auto
+        </label>
+      </div>
+      <input type="text" class="automsg-text" maxlength="300" value="${(m.text || '').replace(/"/g, '&quot;')}">
+    </div>`).join('');
+}
+
+function collectAutoMessages() {
+  const out = {};
+  document.querySelectorAll('#autoMsgList .automsg-row').forEach(row => {
+    out[row.getAttribute('data-type')] = {
+      text: row.querySelector('.automsg-text').value,
+      auto: row.querySelector('.automsg-toggle').checked,
+    };
+  });
+  return out;
 }
 
 async function loadAdminExtras() {
@@ -1109,7 +1225,17 @@ async function loadAdminExtras() {
   if (access) {
     document.getElementById('allowedIpsInput').value   = (access.allowedIps || []).join('\n');
     document.getElementById('pollIntervalInput').value = access.pollIntervalMs || 10000;
+    const ab = access.autoBlock || {};
+    document.getElementById('autoBlockEnabled').checked   = !!ab.enabled;
+    document.getElementById('autoBlockThreshold').value   = ab.thresholdMin || 15;
+    document.getElementById('autoBlockMinutes').value     = ab.blockMin || 30;
+    const ad = access.autoDispatch || {};
+    document.getElementById('autoDispatchEnabled').checked = !!ad.enabled;
+    document.getElementById('autoDispatchMax').value       = ad.max || 4;
   }
+
+  const msgs = await fetch('/api/admin/messages', { headers }).then(r => r.json()).catch(() => null);
+  if (msgs && msgs.messages) renderAutoMessages(msgs.messages);
 
   const data = await fetch('/api/admin/visits', { headers }).then(r => r.json()).catch(() => null);
   const list = document.getElementById('visitsList');
@@ -1157,6 +1283,29 @@ async function saveSettings() {
     if (!ok) return;
   }
 
+  const messages = collectAutoMessages();
+  const autoBlock = {
+    enabled:      document.getElementById('autoBlockEnabled').checked,
+    thresholdMin: Math.max(1, parseInt(document.getElementById('autoBlockThreshold').value) || 15),
+    blockMin:     Math.max(1, parseInt(document.getElementById('autoBlockMinutes').value) || 30),
+  };
+  const autoDispatch = {
+    enabled: document.getElementById('autoDispatchEnabled').checked,
+    max:     Math.max(1, Math.min(4, parseInt(document.getElementById('autoDispatchMax').value) || 4)),
+  };
+
+  // Confirma quando o ADM LIGA algo que manda ação real pro entregador (mensagem auto / block / despacho)
+  const newAutoMsg = Object.entries(messages).some(([t, m]) => m.auto && !(autoMessagesCache[t] && autoMessagesCache[t].auto));
+  if (newAutoMsg) {
+    if (!confirm('Você ativou MENSAGEM automática. Ela vai ser enviada de verdade pro entregador no chat do Foody quando o alerta disparar. Confirmar?')) return;
+  }
+  if (autoBlock.enabled) {
+    if (!confirm(`Você ativou o BLOCK automático. Quem segurar um pedido sem aceitar por ${autoBlock.thresholdMin}min vai ser DESCONECTADO (offline forçado) por ${autoBlock.blockMin}min. Confirmar?`)) return;
+  }
+  if (autoDispatch.enabled) {
+    if (!confirm(`Você ativou o ajuste dinâmico de pedidos por entregador (teto ${autoDispatch.max}). Isso muda a config de despacho da loja no Foody automaticamente. Confirmar?`)) return;
+  }
+
   const headers = { 'Content-Type': 'application/json', 'x-admin-password': adminPass };
 
   const body = { alertMinutes: mins };
@@ -1164,7 +1313,8 @@ async function saveSettings() {
 
   await Promise.all([
     fetch('/config', { method: 'POST', headers, body: JSON.stringify(body) }),
-    fetch('/api/admin/access', { method: 'POST', headers, body: JSON.stringify({ allowedIps, pollIntervalMs }) }),
+    fetch('/api/admin/access', { method: 'POST', headers, body: JSON.stringify({ allowedIps, pollIntervalMs, autoBlock, autoDispatch }) }),
+    fetch('/api/admin/messages', { method: 'POST', headers, body: JSON.stringify({ messages }) }),
   ]);
 
   alertMinutes = mins;
@@ -1312,8 +1462,8 @@ function updateAlertTimers() {
 }
 
 function alertCardHtml(a) {
-  const cls  = a.type === 'missing' || a.type === 'dropped' || a.type === 'cookie' ? 'danger' : a.type === 'single' || a.type === 'shiftEnd' ? 'good' : 'warn';
-  const icon = a.type === 'missing' ? '🚨' : a.type === 'dropped' ? '🚨' : a.type === 'reassigned' ? '🔁' : a.type === 'stationary' ? '⏸️' : a.type === 'zone' ? '📍' : a.type === 'cookie' ? '🍪' : a.type === 'single' ? '✅' : a.type === 'shiftEnd' ? '🌙' : (a.type === 'accept' || a.type === 'depart') ? '⏳' : '⚠️';
+  const cls  = a.type === 'missing' || a.type === 'dropped' || a.type === 'cookie' || a.type === 'block' ? 'danger' : a.type === 'single' || a.type === 'shiftEnd' || a.type === 'unblock' ? 'good' : 'warn';
+  const icon = a.type === 'missing' ? '🚨' : a.type === 'dropped' ? '🚨' : a.type === 'reassigned' ? '🔁' : a.type === 'stationary' ? '⏸️' : a.type === 'zone' ? '📍' : a.type === 'cookie' ? '🍪' : a.type === 'single' ? '✅' : a.type === 'shiftEnd' ? '🌙' : a.type === 'block' ? '⛔' : a.type === 'unblock' ? '✅' : (a.type === 'accept' || a.type === 'depart') ? '⏳' : '⚠️';
   const nudgeDefault = NUDGE_DEFAULTS[a.type];
   return `
     <div class="alert-card ${cls}">
