@@ -646,6 +646,8 @@
         <option value="single">✅ Saiu com 1 pedido</option>
         <option value="block">⛔ Desconectado (block)</option>
         <option value="unblock">✅ Reconectado (fim block)</option>
+        <option value="autoshift">🌙 Fim de expediente (desligou todos)</option>
+        <option value="autoshifton">☀️ Reativou todos</option>
         <option value="cookie">🍪 Cookie expirado</option>
         <option value="shiftEnd">🌙 Expediente encerrado</option>
       </select>
@@ -766,6 +768,24 @@
           Regra: <b>máx = prontos ÷ entregadores disponíveis</b> (arredonda pra cima), travado entre <b>1</b> e o teto.
           Pouco pedido pra muita gente → cai pra 1 (espalha). Muda a config de despacho da loja no Foody.
           Só grava quando o número muda. Padrão: <b>desligado</b>.
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">🌙 Desligar no fim do expediente / religar no horário</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin-bottom:8px;">
+          <input type="checkbox" id="autoShiftEnabled">
+          Ao <b>encerrar o expediente</b>, desconectar <b>todos</b> e religar só quem estava ativo
+        </label>
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label">Horário de volta (HH:MM)</label>
+          <input type="time" id="autoShiftReactivateAt" value="17:00">
+        </div>
+        <div id="autoShiftStatus" style="font-size:12px;margin-top:8px;"></div>
+        <div class="help-box" style="margin-top:8px;">
+          Ao fim do turno, desliga (offline forçado) quem estava conectado e <b>guarda a lista</b>.
+          Ninguém fica disponível de novo antes do horário — quem reabrir o app é desligado de novo.
+          No horário, religa <b>só quem estava na lista</b>. ⚠️ Ação real. Padrão: <b>desligado</b>.
         </div>
       </div>
 
@@ -1142,6 +1162,18 @@ function renderLog() {
         <span>Pedidos por entregador → ${e.maxOrdersPerCourier} (${e.ready} prontos ÷ ${e.available} disp.)</span>
       </div>`;
 
+    if (e.type === 'autoshift_off') return `
+      <div class="log-entry log-warn">
+        <span class="log-time">${time}</span><span>🌙</span>
+        <span>Fim de expediente: ${e.done ?? e.count}/${e.count} entregadores desligados${e.names && e.names.length ? ' — ' + e.names.join(', ') : ''}</span>
+      </div>`;
+
+    if (e.type === 'autoshift_on') return `
+      <div class="log-entry log-success">
+        <span class="log-time">${time}</span><span>☀️</span>
+        <span>Reativados ${e.count} entregadores${e.names && e.names.length ? ' — ' + e.names.join(', ') : ''}</span>
+      </div>`;
+
     if (e.type === 'alert') {
       const loc = (e.lat && e.lng)
         ? ` <a class="coord-link" href="https://www.google.com/maps?q=${e.lat},${e.lng}" target="_blank" rel="noopener" title="Abrir no Google Maps">${e.lat}, ${e.lng}</a>`
@@ -1294,6 +1326,38 @@ function collectQuickMessages() {
   return out;
 }
 
+// ─── Auto-shift: status da lista pendente + reativar manual ───────────────────
+function renderAutoShiftStatus(pending) {
+  const el = document.getElementById('autoShiftStatus');
+  if (!el) return;
+  if (!pending || pending.phase !== 'off' || !pending.count) { el.innerHTML = ''; return; }
+  const when = pending.reactivateTs
+    ? new Date(pending.reactivateTs).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+    : '—';
+  const names = (pending.names || []).join(', ');
+  el.innerHTML = `
+    <div style="background:rgba(59,130,246,0.12);border:1px solid rgba(59,130,246,0.3);border-radius:8px;padding:9px 11px;">
+      🌙 <b>${pending.count}</b> entregador(es) desligado(s), aguardando volta em <b>${when}</b>.
+      <div style="color:var(--muted);margin-top:3px;">${names}</div>
+      <button type="button" class="btn btn-secondary" style="font-size:12px;padding:6px 12px;margin-top:8px;" onclick="reactivateNow()">☀️ Reativar agora</button>
+    </div>`;
+}
+
+async function reactivateNow() {
+  if (!confirm('Reativar AGORA todos os entregadores da lista pendente?')) return;
+  try {
+    const r = await fetch('/api/admin/autoshift/reactivate', {
+      method: 'POST', headers: { 'x-admin-password': adminPass },
+    }).then(r => r.json());
+    if (r.ok) {
+      alert(`Reativados: ${r.reactivated}.` + (r.remaining ? ` Faltaram ${r.remaining} (tenta de novo).` : ''));
+      await loadAdminExtras();
+    } else {
+      alert('Falhou: ' + (r.error || 'erro'));
+    }
+  } catch (e) { alert('Erro: ' + e.message); }
+}
+
 async function loadAdminExtras() {
   const headers = { 'x-admin-password': adminPass };
 
@@ -1308,6 +1372,10 @@ async function loadAdminExtras() {
     const ad = access.autoDispatch || {};
     document.getElementById('autoDispatchEnabled').checked = !!ad.enabled;
     document.getElementById('autoDispatchMax').value       = ad.max || 4;
+    const as = access.autoShift || {};
+    document.getElementById('autoShiftEnabled').checked      = !!as.enabled;
+    document.getElementById('autoShiftReactivateAt').value   = as.reactivateAt || '17:00';
+    renderAutoShiftStatus(access.autoShiftPending);
   }
 
   const msgs = await fetch('/api/admin/messages', { headers }).then(r => r.json()).catch(() => null);
@@ -1371,6 +1439,10 @@ async function saveSettings() {
     enabled: document.getElementById('autoDispatchEnabled').checked,
     max:     Math.max(1, Math.min(4, parseInt(document.getElementById('autoDispatchMax').value) || 4)),
   };
+  const autoShift = {
+    enabled:      document.getElementById('autoShiftEnabled').checked,
+    reactivateAt: document.getElementById('autoShiftReactivateAt').value || '17:00',
+  };
 
   // Confirma quando o ADM LIGA algo que manda ação real pro entregador (mensagem auto / block / despacho)
   const newAutoMsg = Object.entries(messages).some(([t, m]) => m.auto && !(autoMessagesCache[t] && autoMessagesCache[t].auto));
@@ -1383,6 +1455,9 @@ async function saveSettings() {
   if (autoDispatch.enabled) {
     if (!confirm(`Você ativou o ajuste dinâmico de pedidos por entregador (teto ${autoDispatch.max}). Isso muda a config de despacho da loja no Foody automaticamente. Confirmar?`)) return;
   }
+  if (autoShift.enabled) {
+    if (!confirm(`Você ativou o desligar/religar por expediente. Ao encerrar o turno, TODOS os entregadores conectados serão desligados (offline forçado) e só voltam às ${autoShift.reactivateAt}. Confirmar?`)) return;
+  }
 
   const headers = { 'Content-Type': 'application/json', 'x-admin-password': adminPass };
 
@@ -1391,7 +1466,7 @@ async function saveSettings() {
 
   await Promise.all([
     fetch('/config', { method: 'POST', headers, body: JSON.stringify(body) }),
-    fetch('/api/admin/access', { method: 'POST', headers, body: JSON.stringify({ allowedIps, pollIntervalMs, autoBlock, autoDispatch }) }),
+    fetch('/api/admin/access', { method: 'POST', headers, body: JSON.stringify({ allowedIps, pollIntervalMs, autoBlock, autoDispatch, autoShift }) }),
     fetch('/api/admin/messages', { method: 'POST', headers, body: JSON.stringify({ messages, quick }) }),
   ]);
   quickMessagesList = quick.length ? quick : quickMessagesList;
@@ -1541,8 +1616,8 @@ function updateAlertTimers() {
 }
 
 function alertCardHtml(a) {
-  const cls  = a.type === 'missing' || a.type === 'dropped' || a.type === 'cookie' || a.type === 'block' ? 'danger' : a.type === 'single' || a.type === 'shiftEnd' || a.type === 'unblock' ? 'good' : 'warn';
-  const icon = a.type === 'missing' ? '🚨' : a.type === 'dropped' ? '🚨' : a.type === 'reassigned' ? '🔁' : a.type === 'stationary' ? '⏸️' : a.type === 'zone' ? '📍' : a.type === 'cookie' ? '🍪' : a.type === 'single' ? '✅' : a.type === 'shiftEnd' ? '🌙' : a.type === 'block' ? '⛔' : a.type === 'unblock' ? '✅' : (a.type === 'accept' || a.type === 'depart') ? '⏳' : '⚠️';
+  const cls  = a.type === 'missing' || a.type === 'dropped' || a.type === 'cookie' || a.type === 'block' ? 'danger' : a.type === 'single' || a.type === 'shiftEnd' || a.type === 'unblock' || a.type === 'autoshifton' ? 'good' : 'warn';
+  const icon = a.type === 'missing' ? '🚨' : a.type === 'dropped' ? '🚨' : a.type === 'reassigned' ? '🔁' : a.type === 'stationary' ? '⏸️' : a.type === 'zone' ? '📍' : a.type === 'cookie' ? '🍪' : a.type === 'single' ? '✅' : a.type === 'shiftEnd' ? '🌙' : a.type === 'block' ? '⛔' : a.type === 'unblock' ? '✅' : a.type === 'autoshift' ? '🌙' : a.type === 'autoshifton' ? '☀️' : (a.type === 'accept' || a.type === 'depart') ? '⏳' : '⚠️';
   const nudgeDefault = NUDGE_DEFAULTS[a.type];
   return `
     <div class="alert-card ${cls}">

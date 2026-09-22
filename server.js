@@ -63,6 +63,9 @@ let config = {
   // Pedidos por entregador dinâmico: com pouco pedido pra muito entregador, baixa o limite pra
   // espalhar melhor. Regra: ceil(prontos ÷ disponíveis), travado entre 1 e max. Desligado por padrão.
   autoDispatch: { enabled: false, max: 4 },
+  // Desliga todo mundo ao encerrar o expediente e reativa SÓ quem estava conectado, no horário
+  // de volta (padrão 17:00 BRT, editável). Ação real e agressiva — desligado por padrão.
+  autoShift: { enabled: false, reactivateAt: '17:00' },
   zones: [],            // cercas virtuais: [{ id, name, polygon: [[lat,lng],...] }]
 };
 
@@ -83,6 +86,8 @@ function loadConfig() {
       if (saved.autoMessages && typeof saved.autoMessages === 'object') config.autoMessages = saved.autoMessages;
       if (Array.isArray(saved.quickMessages)) config.quickMessages = saved.quickMessages;
       if (saved.autoBlock && typeof saved.autoBlock === 'object') config.autoBlock = { ...config.autoBlock, ...saved.autoBlock };
+      if (saved.autoDispatch && typeof saved.autoDispatch === 'object') config.autoDispatch = { ...config.autoDispatch, ...saved.autoDispatch };
+      if (saved.autoShift && typeof saved.autoShift === 'object') config.autoShift = { ...config.autoShift, ...saved.autoShift };
       if (Array.isArray(saved.zones)) config.zones = saved.zones;
     } catch (e) {}
   }
@@ -457,6 +462,12 @@ async function findCourierConnection(name) {
     || null;
 }
 
+// Alterna a conexão do entregador (connected ⇄ inactive). Toggle CEGO — sempre cheque o
+// status antes de chamar, senão dobra e volta.
+async function toggleCourier(id) {
+  return foodyPost(`https://app.foodydelivery.com/api/v2/courier/toggle/${id}`, {});
+}
+
 // ── Estado do monitor ─────────────────────────────────────────────────────────
 
 const courierMap = new Map();
@@ -570,6 +581,8 @@ function addAlert(type, msg, courierName = null, extra = {}) {
       : type === 'depart'    ? '⏳ Demora pra sair'
       : type === 'block'     ? '⛔ Entregador desconectado'
       : type === 'unblock'   ? '✅ Entregador reconectado'
+      : type === 'autoshift' ? '🌙 Turno encerrado — entregadores desligados'
+      : type === 'autoshifton' ? '☀️ Entregadores reativados'
       : '⚠️ Demora no retorno',
     body: msg,
     tag: `${type}-${courierName || Date.now()}`,
@@ -970,6 +983,118 @@ async function applyAutoDispatch() {
   }
 }
 
+// ── Auto-shift: desliga todo mundo no fim do expediente, reativa a lista no horário ──
+// A LISTA É SAGRADA (o John frisou): guardo por id do Foody (não por nome), num arquivo
+// persistente, e só reativo EXATAMENTE quem está nela e está inativo. Nunca mexe em quem
+// não estava conectado no fim do turno. Reativação sempre honra a lista (mesmo se desligarem
+// a função depois), pra nunca deixar ninguém preso offline.
+const AUTOSHIFT_FILE = path.join(LOGS_DIR, 'autoshift.json');
+// phase: 'idle' (nada pendente) | 'off' (desliguei todo mundo, aguardando reativar)
+let autoShiftState = { phase: 'idle', list: [], reactivateTs: null, disconnectedOpDate: null };
+let lastEnforceOffAt = 0;
+
+function loadAutoShift() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(AUTOSHIFT_FILE, 'utf8'));
+    if (raw && typeof raw === 'object') autoShiftState = { phase: 'idle', list: [], reactivateTs: null, disconnectedOpDate: null, ...raw };
+  } catch (e) {}
+}
+function saveAutoShift() {
+  try { fs.writeFileSync(AUTOSHIFT_FILE, JSON.stringify(autoShiftState, null, 2)); }
+  catch (e) { console.error('[WRITE-FAIL saveAutoShift]', AUTOSHIFT_FILE, e.message); }
+}
+loadAutoShift();
+
+// Próximo instante (ms) em que dá o horário de reativar (HH:MM BRT). Se já passou hoje, amanhã.
+function computeReactivateTs(reactivateAt) {
+  const [hh, mm] = String(reactivateAt || '17:00').split(':').map(Number);
+  const nowBRT = new Date(Date.now() - 3 * 3600 * 1000); // leio o relógio de parede BRT em UTC
+  let ts = Date.UTC(nowBRT.getUTCFullYear(), nowBRT.getUTCMonth(), nowBRT.getUTCDate(), (hh || 0) + 3, mm || 0, 0, 0);
+  if (ts <= Date.now()) ts += 24 * 3600 * 1000; // já passou hoje → próxima ocorrência amanhã
+  return ts;
+}
+
+// Encerrou o expediente → desliga todos os que estão 'connected' e guarda a lista.
+async function autoShiftDisconnectAll() {
+  if (autoShiftState.phase === 'off') return;                 // já desliguei neste turno
+  if (autoShiftState.disconnectedOpDate === currentOpDate) return; // trava por turno
+  let arr;
+  try { arr = await listCourierConnections(); }
+  catch (e) { console.error('[AUTO-SHIFT] list falhou, não desligo:', e.message); return; }
+  const connected = arr.filter(c => c.status === 'connected' && c.id != null);
+  // Grava a lista ANTES de desligar (se cair no meio, sei quem reativar).
+  autoShiftState = {
+    phase: 'off',
+    list: connected.map(c => ({ id: c.id, name: c.courierName })),
+    reactivateTs: computeReactivateTs((config.autoShift || {}).reactivateAt),
+    disconnectedOpDate: currentOpDate,
+  };
+  saveAutoShift();
+  let done = 0;
+  for (const c of connected) {
+    try { await toggleCourier(c.id); done++; }
+    catch (e) { console.error(`[AUTO-SHIFT] falhou desligar ${c.courierName}:`, e.message); }
+  }
+  appendLog({ type: 'autoshift_off', count: connected.length, done, names: connected.map(c => c.courierName) });
+  addAlert('autoshift', `Expediente encerrado — ${done}/${connected.length} entregadores desligados. Voltam às ${(config.autoShift || {}).reactivateAt || '17:00'}.`);
+  console.log(`[AUTO-SHIFT] desligados ${done}/${connected.length}; reativa em ${new Date(autoShiftState.reactivateTs).toISOString()}`);
+}
+
+// Madrugada: quem reabriu o app antes da hora volta pro off (mantém todos desligados).
+async function autoShiftEnforceOff() {
+  if (Date.now() - lastEnforceOffAt < 120000) return; // no máx. a cada 2min (não martela a API)
+  lastEnforceOffAt = Date.now();
+  let arr;
+  try { arr = await listCourierConnections(); } catch (e) { return; }
+  for (const item of autoShiftState.list) {
+    const c = arr.find(x => x.id === item.id);
+    if (c && c.status === 'connected') {
+      try { await toggleCourier(item.id); console.log(`[AUTO-SHIFT] ${item.name} reabriu antes da hora → desligado de novo`); }
+      catch (e) { console.error('[AUTO-SHIFT enforce]', e.message); }
+    }
+  }
+}
+
+// Deu o horário → reativa SÓ a lista salva (e só quem está inativo). Remove da lista quem
+// voltou; se sobrar (falha), tenta de novo no próximo ciclo. Zera quando a lista esvazia.
+async function autoShiftReactivate() {
+  let arr;
+  try { arr = await listCourierConnections(); }
+  catch (e) { console.error('[AUTO-SHIFT] list falhou, tento reativar depois:', e.message); return; }
+  const remaining = [];
+  let back = 0;
+  for (const item of autoShiftState.list) {
+    const c = arr.find(x => x.id === item.id);
+    if (!c) { back++; continue; }                    // sumiu da lista do Foody → não insisto
+    if (c.status === 'connected') { back++; continue; } // já está on → ok
+    try { await toggleCourier(item.id); back++; }    // inactive → liga
+    catch (e) { console.error(`[AUTO-SHIFT] falhou reativar ${item.name}:`, e.message); remaining.push(item); }
+  }
+  if (remaining.length === 0) {
+    const names = autoShiftState.list.map(i => i.name);
+    autoShiftState = { phase: 'idle', list: [], reactivateTs: null, disconnectedOpDate: null };
+    saveAutoShift();
+    appendLog({ type: 'autoshift_on', count: names.length, names });
+    addAlert('autoshifton', `Entregadores reativados (${names.length}) — início do expediente.`);
+    console.log(`[AUTO-SHIFT] reativados ${names.length}`);
+  } else {
+    autoShiftState.list = remaining; // guarda os que faltaram pra tentar de novo
+    saveAutoShift();
+    console.log(`[AUTO-SHIFT] reativados ${back}, faltam ${remaining.length} — tento no próximo ciclo`);
+  }
+}
+
+// Roda a cada poll: mantém off na madrugada e reativa quando dá a hora. A reativação sempre
+// honra a lista pendente; o enforce-off só age se a função estiver ligada.
+async function processAutoShift() {
+  if (autoShiftState.phase !== 'off') return;
+  if (Date.now() >= autoShiftState.reactivateTs) {
+    await autoShiftReactivate();
+  } else if ((config.autoShift || {}).enabled) {
+    await autoShiftEnforceOff();
+  }
+}
+
 // ── Loop de polling ───────────────────────────────────────────────────────────
 
 async function doPoll() {
@@ -1023,6 +1148,7 @@ async function doPoll() {
     // Motores de ação (só agem se ligados no ADM; senão retornam na hora):
     applyAutoDispatch().catch(e => console.error('[AUTO-DISPATCH]', e.message));
     if (blockedCouriers.size) processBlockUnblocks().catch(e => console.error('[UNBLOCK]', e.message));
+    processAutoShift().catch(e => console.error('[AUTO-SHIFT]', e.message));
 
     await refreshMerchant();
     const storeOpen   = isStoreOpenNowBRT();
@@ -1044,6 +1170,11 @@ async function doPoll() {
       addAlert('shiftEnd', 'Expediente encerrado — sem pedidos pendentes.');
     }
     shiftIdle = idleNow;
+
+    // Auto-shift: encerrou → desliga todo mundo (guarda a lista pra reativar no horário).
+    if (idleNow && (config.autoShift || {}).enabled) {
+      autoShiftDisconnectAll().catch(e => console.error('[AUTO-SHIFT]', e.message));
+    }
 
     lastUpdated = Date.now();
     sessionOk   = true;
@@ -1355,6 +1486,13 @@ app.get('/api/admin/access', (req, res) => {
     pollIntervalMs: config.pollIntervalMs || 10000,
     autoBlock:      config.autoBlock || { enabled: false, thresholdMin: 15, blockMin: 30 },
     autoDispatch:   config.autoDispatch || { enabled: false, max: 4 },
+    autoShift:      config.autoShift || { enabled: false, reactivateAt: '17:00' },
+    autoShiftPending: {
+      phase:        autoShiftState.phase,
+      count:        (autoShiftState.list || []).length,
+      names:        (autoShiftState.list || []).map(i => i.name),
+      reactivateTs: autoShiftState.reactivateTs,
+    },
   });
 });
 
@@ -1383,8 +1521,30 @@ app.post('/api/admin/access', (req, res) => {
     };
     lastMaxOrdersSet = null; // força reavaliar o número na próxima volta do poll
   }
+  if (req.body.autoShift && typeof req.body.autoShift === 'object') {
+    const s = req.body.autoShift;
+    const at = /^\d{1,2}:\d{2}$/.test(String(s.reactivateAt || '')) ? s.reactivateAt : (config.autoShift?.reactivateAt || '17:00');
+    config.autoShift = { enabled: !!s.enabled, reactivateAt: at };
+    // Se já há lista pendente, recalcula o horário de volta com o novo valor.
+    if (autoShiftState.phase === 'off') {
+      autoShiftState.reactivateTs = computeReactivateTs(at);
+      saveAutoShift();
+    }
+  }
   saveConfig();
   res.json({ ok: true });
+});
+
+// Reativar AGORA a lista pendente do auto-shift (válvula de segurança manual do ADM).
+app.post('/api/admin/autoshift/reactivate', async (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ ok: false, error: 'unauthorized' });
+  if (autoShiftState.phase !== 'off' || !(autoShiftState.list || []).length) {
+    return res.json({ ok: true, reactivated: 0, note: 'nada pendente' });
+  }
+  const total = autoShiftState.list.length;
+  await autoShiftReactivate().catch(e => console.error('[AUTO-SHIFT manual]', e.message));
+  const left = autoShiftState.phase === 'off' ? (autoShiftState.list || []).length : 0;
+  res.json({ ok: true, reactivated: total - left, remaining: left });
 });
 
 app.post('/api/track', (req, res) => {
