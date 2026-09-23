@@ -790,6 +790,19 @@
       </div>
 
       <div class="form-group">
+        <label class="form-label">📨 Mensagem de fim de expediente</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin-bottom:8px;">
+          <input type="checkbox" id="shiftEndMsgEnabled">
+          Enviar uma mensagem pra <b>todos os entregadores ativos</b> quando o expediente encerrar
+        </label>
+        <textarea id="shiftEndMsgText" maxlength="300" style="font-family:inherit;min-height:60px;">Expediente encerrado. Obrigado pelo trabalho de hoje! 🌙</textarea>
+        <div class="help-box" style="margin-top:8px;">
+          Dispara <b>uma vez</b>, no encerramento do turno, no chat do Foody de cada entregador que
+          estiver ativo no monitor. ⚠️ Mensagem <b>REAL</b>. Padrão: <b>desligado</b>.
+        </div>
+      </div>
+
+      <div class="form-group">
         <label class="form-label">👥 Quem conectou (últimas 30)</label>
         <div id="visitsList" style="max-height:180px;overflow-y:auto;font-size:12px;color:var(--muted);"></div>
       </div>
@@ -1174,6 +1187,18 @@ function renderLog() {
         <span>Reativados ${e.count} entregadores${e.names && e.names.length ? ' — ' + e.names.join(', ') : ''}</span>
       </div>`;
 
+    if (e.type === 'shiftend_broadcast') return `
+      <div class="log-entry log-info">
+        <span class="log-time">${time}</span><span>📨</span>
+        <span>Mensagem de fim de expediente enviada a ${e.count} entregador(es)${e.names && e.names.length ? ' — ' + e.names.join(', ') : ''}</span>
+      </div>`;
+
+    if (e.type === 'shiftend_msg') return `
+      <div class="log-entry log-info">
+        <span class="log-time">${time}</span><span>📨</span>
+        <span>Fim de expediente → ${e.courierName}: "${e.msg}"</span>
+      </div>`;
+
     if (e.type === 'alert') {
       const loc = (e.lat && e.lng)
         ? ` <a class="coord-link" href="https://www.google.com/maps?q=${e.lat},${e.lng}" target="_blank" rel="noopener" title="Abrir no Google Maps">${e.lat}, ${e.lng}</a>`
@@ -1376,6 +1401,9 @@ async function loadAdminExtras() {
     document.getElementById('autoShiftEnabled').checked      = !!as.enabled;
     document.getElementById('autoShiftReactivateAt').value   = as.reactivateAt || '17:00';
     renderAutoShiftStatus(access.autoShiftPending);
+    const sem = access.shiftEndMessage || {};
+    document.getElementById('shiftEndMsgEnabled').checked = !!sem.enabled;
+    if (sem.text) document.getElementById('shiftEndMsgText').value = sem.text;
   }
 
   const msgs = await fetch('/api/admin/messages', { headers }).then(r => r.json()).catch(() => null);
@@ -1443,6 +1471,10 @@ async function saveSettings() {
     enabled:      document.getElementById('autoShiftEnabled').checked,
     reactivateAt: document.getElementById('autoShiftReactivateAt').value || '17:00',
   };
+  const shiftEndMessage = {
+    enabled: document.getElementById('shiftEndMsgEnabled').checked,
+    text:    document.getElementById('shiftEndMsgText').value.trim(),
+  };
 
   // Confirma quando o ADM LIGA algo que manda ação real pro entregador (mensagem auto / block / despacho)
   const newAutoMsg = Object.entries(messages).some(([t, m]) => m.auto && !(autoMessagesCache[t] && autoMessagesCache[t].auto));
@@ -1458,6 +1490,9 @@ async function saveSettings() {
   if (autoShift.enabled) {
     if (!confirm(`Você ativou o desligar/religar por expediente. Ao encerrar o turno, TODOS os entregadores conectados serão desligados (offline forçado) e só voltam às ${autoShift.reactivateAt}. Confirmar?`)) return;
   }
+  if (shiftEndMessage.enabled) {
+    if (!confirm('Você ativou a MENSAGEM de fim de expediente. Ela será enviada de verdade pra todos os entregadores ativos quando o turno encerrar. Confirmar?')) return;
+  }
 
   const headers = { 'Content-Type': 'application/json', 'x-admin-password': adminPass };
 
@@ -1466,7 +1501,7 @@ async function saveSettings() {
 
   await Promise.all([
     fetch('/config', { method: 'POST', headers, body: JSON.stringify(body) }),
-    fetch('/api/admin/access', { method: 'POST', headers, body: JSON.stringify({ allowedIps, pollIntervalMs, autoBlock, autoDispatch, autoShift }) }),
+    fetch('/api/admin/access', { method: 'POST', headers, body: JSON.stringify({ allowedIps, pollIntervalMs, autoBlock, autoDispatch, autoShift, shiftEndMessage }) }),
     fetch('/api/admin/messages', { method: 'POST', headers, body: JSON.stringify({ messages, quick }) }),
   ]);
   quickMessagesList = quick.length ? quick : quickMessagesList;

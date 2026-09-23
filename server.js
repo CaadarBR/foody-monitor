@@ -66,6 +66,8 @@ let config = {
   // Desliga todo mundo ao encerrar o expediente e reativa SÓ quem estava conectado, no horário
   // de volta (padrão 17:00 BRT, editável). Ação real e agressiva — desligado por padrão.
   autoShift: { enabled: false, reactivateAt: '17:00' },
+  // Mensagem única de "fim de expediente" pra todos os entregadores ativos quando o turno encerra.
+  shiftEndMessage: { enabled: false, text: 'Expediente encerrado. Obrigado pelo trabalho de hoje! 🌙' },
   zones: [],            // cercas virtuais: [{ id, name, polygon: [[lat,lng],...] }]
 };
 
@@ -88,6 +90,7 @@ function loadConfig() {
       if (saved.autoBlock && typeof saved.autoBlock === 'object') config.autoBlock = { ...config.autoBlock, ...saved.autoBlock };
       if (saved.autoDispatch && typeof saved.autoDispatch === 'object') config.autoDispatch = { ...config.autoDispatch, ...saved.autoDispatch };
       if (saved.autoShift && typeof saved.autoShift === 'object') config.autoShift = { ...config.autoShift, ...saved.autoShift };
+      if (saved.shiftEndMessage && typeof saved.shiftEndMessage === 'object') config.shiftEndMessage = { ...config.shiftEndMessage, ...saved.shiftEndMessage };
       if (Array.isArray(saved.zones)) config.zones = saved.zones;
     } catch (e) {}
   }
@@ -1095,6 +1098,22 @@ async function processAutoShift() {
   }
 }
 
+// Manda a mensagem única de "fim de expediente" pra todos os entregadores ativos (online no
+// monitor) quando o turno encerra. 1x por turno. Dedup por nome.
+function sendShiftEndMessages() {
+  const cfg = config.shiftEndMessage || {};
+  if (!cfg.enabled || !cfg.text) return;
+  const names = [...new Set([...courierMap.values()].map(c => c.name).filter(Boolean))];
+  if (!names.length) return;
+  for (const name of names) {
+    sendNudgeMessage(name, cfg.text)
+      .then(r => { appendLog({ type: 'shiftend_msg', courierName: r.courierName, msg: cfg.text }); console.log(`[FIM-EXPEDIENTE] → ${r.courierName}`); })
+      .catch(e => console.error('[FIM-EXPEDIENTE]', name, e.message));
+  }
+  appendLog({ type: 'shiftend_broadcast', count: names.length, names });
+  console.log(`[FIM-EXPEDIENTE] enviando pra ${names.length} entregadores ativos`);
+}
+
 // ── Loop de polling ───────────────────────────────────────────────────────────
 
 async function doPoll() {
@@ -1168,6 +1187,8 @@ async function doPoll() {
     if (idleNow && shiftEndAlertedDate !== currentOpDate) {
       shiftEndAlertedDate = currentOpDate;
       addAlert('shiftEnd', 'Expediente encerrado — sem pedidos pendentes.');
+      // Mensagem de fim de expediente pros ativos (antes de qualquer desconexão do auto-shift).
+      sendShiftEndMessages();
     }
     shiftIdle = idleNow;
 
@@ -1487,6 +1508,7 @@ app.get('/api/admin/access', (req, res) => {
     autoBlock:      config.autoBlock || { enabled: false, thresholdMin: 15, blockMin: 30 },
     autoDispatch:   config.autoDispatch || { enabled: false, max: 4 },
     autoShift:      config.autoShift || { enabled: false, reactivateAt: '17:00' },
+    shiftEndMessage: config.shiftEndMessage || { enabled: false, text: '' },
     autoShiftPending: {
       phase:        autoShiftState.phase,
       count:        (autoShiftState.list || []).length,
@@ -1530,6 +1552,13 @@ app.post('/api/admin/access', (req, res) => {
       autoShiftState.reactivateTs = computeReactivateTs(at);
       saveAutoShift();
     }
+  }
+  if (req.body.shiftEndMessage && typeof req.body.shiftEndMessage === 'object') {
+    const s = req.body.shiftEndMessage;
+    config.shiftEndMessage = {
+      enabled: !!s.enabled,
+      text:    (typeof s.text === 'string' && s.text.trim()) ? s.text.trim().slice(0, 300) : (config.shiftEndMessage?.text || 'Expediente encerrado. Obrigado pelo trabalho de hoje! 🌙'),
+    };
   }
   saveConfig();
   res.json({ ok: true });
