@@ -967,18 +967,27 @@ const AUTODESPATCH_DEFAULTS = {
 };
 let lastMaxOrdersSet = null;
 
+// O máximo de entregas por entregador que a regra recomenda AGORA: ceil(prontos ÷ online),
+// travado entre 1 e o teto. Null se não tem ninguém online. Usado tanto pra aplicar (quando
+// ligado) quanto pra mostrar no cantinho do monitor (sempre).
+function desiredMaxOrders() {
+  const ad = config.autoDispatch || {};
+  const available = courierMap.size; // entregadores online neste ciclo
+  if (available <= 0) return null;
+  const cap = Math.max(1, Math.min(4, parseInt(ad.max) || 4));
+  return Math.max(1, Math.min(cap, Math.ceil(readyOrdersCount / available)));
+}
+
 async function applyAutoDispatch() {
   const ad = config.autoDispatch || {};
   if (!ad.enabled) return;
-  const available = courierMap.size; // entregadores online neste ciclo
-  if (available <= 0) return;
-  const cap     = Math.max(1, Math.min(4, parseInt(ad.max) || 4));
-  const desired = Math.max(1, Math.min(cap, Math.ceil(readyOrdersCount / available)));
-  if (desired === lastMaxOrdersSet) return; // só grava quando muda
+  const desired = desiredMaxOrders();
+  if (desired == null || desired === lastMaxOrdersSet) return; // só grava quando muda
   const payload = { ...AUTODESPATCH_DEFAULTS, ...(ad.template || {}), maxOrdersPerCourier: desired };
   try {
     await foodyPostForm('https://app.foodydelivery.com/api/company/autodespatch/config', payload);
     lastMaxOrdersSet = desired;
+    const available = courierMap.size;
     appendLog({ type: 'auto_dispatch', maxOrdersPerCourier: desired, available, ready: readyOrdersCount });
     console.log(`[AUTO-DISPATCH] maxOrdersPerCourier = ${desired} (prontos ${readyOrdersCount} ÷ ${available} disp.)`);
   } catch (e) {
@@ -1272,6 +1281,10 @@ function buildStatePayload() {
     alerts:           activeAlerts,
     holding:          buildHolding(),
     autoNudgeMissing: !!(mergedAutoMessages().missing || {}).auto,
+    // Máx. de entregas por entregador — mostrado sempre no cantinho do monitor
+    maxOrders:        desiredMaxOrders(),
+    maxOrdersAuto:    !!(config.autoDispatch || {}).enabled,
+    maxOrdersApplied: lastMaxOrdersSet,
     // Textos padrão por tipo — pro modal "alertar entregador" pré-preencher com o que o ADM editou
     nudgeDefaults:    Object.fromEntries(Object.entries(mergedAutoMessages()).map(([k, v]) => [k, v.text])),
     quickMessages:    quickMessages(), // botões rápidos do modal (editáveis pelo ADM)
