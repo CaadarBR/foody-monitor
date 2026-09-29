@@ -841,12 +841,17 @@
         <label class="form-label">📨 Mensagem de fim de expediente</label>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin-bottom:8px;">
           <input type="checkbox" id="shiftEndMsgEnabled">
-          Enviar uma mensagem pra <b>todos os entregadores ativos</b> quando o expediente encerrar
+          📨 Avisar os <b>entregadores</b> (manda a mensagem abaixo no chat do Foody)
+        </label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin-bottom:8px;">
+          <input type="checkbox" id="shiftEndMsgNotifyOwner">
+          🔔 Me avisar no <b>meu celular</b> (notificação push de "expediente encerrado")
         </label>
         <textarea id="shiftEndMsgText" maxlength="300" style="font-family:inherit;min-height:60px;">Expediente encerrado. Obrigado pelo trabalho de hoje! 🌙</textarea>
         <div class="help-box" style="margin-top:8px;">
-          Dispara <b>uma vez</b>, no encerramento do turno, no chat do Foody de cada entregador que
-          estiver ativo no monitor. ⚠️ Mensagem <b>REAL</b>. Padrão: <b>desligado</b>.
+          Dispara <b>uma vez</b>, no encerramento do turno. A mensagem acima vai no chat do Foody de
+          cada entregador ativo (só se "Avisar os entregadores" estiver ligado — ⚠️ mensagem <b>REAL</b>).
+          O aviso no seu celular é independente. Padrão: entregadores <b>OFF</b>, seu celular <b>ON</b>.
         </div>
       </div>
 
@@ -1463,7 +1468,8 @@ async function loadAdminExtras() {
     document.getElementById('autoShiftReactivateAt').value   = as.reactivateAt || '17:00';
     renderAutoShiftStatus(access.autoShiftPending);
     const sem = access.shiftEndMessage || {};
-    document.getElementById('shiftEndMsgEnabled').checked = !!sem.enabled;
+    document.getElementById('shiftEndMsgEnabled').checked     = !!sem.enabled;
+    document.getElementById('shiftEndMsgNotifyOwner').checked = sem.notifyOwner !== false;
     if (sem.text) document.getElementById('shiftEndMsgText').value = sem.text;
   }
 
@@ -1534,8 +1540,9 @@ async function saveSettings() {
     reactivateAt: document.getElementById('autoShiftReactivateAt').value || '17:00',
   };
   const shiftEndMessage = {
-    enabled: document.getElementById('shiftEndMsgEnabled').checked,
-    text:    document.getElementById('shiftEndMsgText').value.trim(),
+    enabled:     document.getElementById('shiftEndMsgEnabled').checked,
+    notifyOwner: document.getElementById('shiftEndMsgNotifyOwner').checked,
+    text:        document.getElementById('shiftEndMsgText').value.trim(),
   };
 
   // Confirma quando o ADM LIGA algo que manda ação real pro entregador (mensagem auto / block / despacho)

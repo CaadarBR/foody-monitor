@@ -66,8 +66,10 @@ let config = {
   // Desliga todo mundo ao encerrar o expediente e reativa SÓ quem estava conectado, no horário
   // de volta (padrão 17:00 BRT, editável). Ação real e agressiva — desligado por padrão.
   autoShift: { enabled: false, reactivateAt: '17:00' },
-  // Mensagem única de "fim de expediente" pra todos os entregadores ativos quando o turno encerra.
-  shiftEndMessage: { enabled: false, text: 'Expediente encerrado. Obrigado pelo trabalho de hoje! 🌙' },
+  // Mensagem única de "fim de expediente". Dois destinos independentes:
+  //  - enabled     → manda no chat do Foody pra todos os entregadores ativos (padrão OFF).
+  //  - notifyOwner → manda a notificação push pro celular do John (padrão ON).
+  shiftEndMessage: { enabled: false, notifyOwner: true, text: 'Expediente encerrado. Obrigado pelo trabalho de hoje! 🌙' },
   zones: [],            // cercas virtuais: [{ id, name, polygon: [[lat,lng],...] }]
 };
 
@@ -563,7 +565,7 @@ function loadOnlineTimes() {
 
 loadOnlineTimes();
 
-function addAlert(type, msg, courierName = null, extra = {}) {
+function addAlert(type, msg, courierName = null, extra = {}, opts = {}) {
   const alert = { id: Date.now(), type, msg, time: new Date().toISOString(), courierName, ...extra };
   activeAlerts.unshift(alert);
   if (activeAlerts.length > 30) activeAlerts.pop();
@@ -571,6 +573,8 @@ function addAlert(type, msg, courierName = null, extra = {}) {
     ...(extra.lat != null && extra.lng != null ? { lat: extra.lat, lng: extra.lng } : {}),
     ...(extra.gpsNull ? { gpsNull: true } : {}) });
   console.log(`[ALERTA] ${msg}`);
+  // opts.push === false → registra o alerta na tela mas NÃO manda notificação pro celular.
+  if (opts.push === false) return alert;
   sendPush({
     title: type === 'missing' ? '🚨 Sumiu do mapa!'
       : type === 'dropped'   ? '🚨 Desconectou com pedido'
@@ -1215,8 +1219,10 @@ async function doPoll() {
     // Avisa "encerrado" só 1x por turno (não repete por restart nem por oscilação do quadro).
     if (idleNow && shiftEndAlertedDate !== currentOpDate) {
       shiftEndAlertedDate = currentOpDate;
-      addAlert('shiftEnd', 'Expediente encerrado — sem pedidos pendentes.');
-      // Mensagem de fim de expediente pros ativos (antes de qualquer desconexão do auto-shift).
+      // Push pro John só se ele deixou ligado (notifyOwner). O alerta na tela fica sempre.
+      const semCfg = config.shiftEndMessage || {};
+      addAlert('shiftEnd', 'Expediente encerrado — sem pedidos pendentes.', null, {}, { push: semCfg.notifyOwner !== false });
+      // Mensagem de fim de expediente pros entregadores ativos (antes de qualquer desconexão do auto-shift).
       sendShiftEndMessages();
     }
     shiftIdle = idleNow;
@@ -1566,7 +1572,7 @@ app.get('/api/admin/access', (req, res) => {
     autoBlock:      config.autoBlock || { enabled: false, thresholdMin: 15, blockMin: 30 },
     autoDispatch:   config.autoDispatch || { enabled: false, max: 4 },
     autoShift:      config.autoShift || { enabled: false, reactivateAt: '17:00' },
-    shiftEndMessage: config.shiftEndMessage || { enabled: false, text: '' },
+    shiftEndMessage: config.shiftEndMessage || { enabled: false, notifyOwner: true, text: '' },
     autoShiftPending: {
       phase:        autoShiftState.phase,
       count:        (autoShiftState.list || []).length,
@@ -1615,8 +1621,9 @@ app.post('/api/admin/access', (req, res) => {
   if (req.body.shiftEndMessage && typeof req.body.shiftEndMessage === 'object') {
     const s = req.body.shiftEndMessage;
     config.shiftEndMessage = {
-      enabled: !!s.enabled,
-      text:    (typeof s.text === 'string' && s.text.trim()) ? s.text.trim().slice(0, 300) : (config.shiftEndMessage?.text || 'Expediente encerrado. Obrigado pelo trabalho de hoje! 🌙'),
+      enabled:     !!s.enabled,
+      notifyOwner: s.notifyOwner !== false, // padrão ON — só desliga se mandar explicitamente false
+      text:        (typeof s.text === 'string' && s.text.trim()) ? s.text.trim().slice(0, 300) : (config.shiftEndMessage?.text || 'Expediente encerrado. Obrigado pelo trabalho de hoje! 🌙'),
     };
   }
   saveConfig();
