@@ -799,14 +799,23 @@
           <input type="checkbox" id="autoDispatchEnabled">
           Ajustar sozinho o <b>máx. de pedidos por entregador</b> conforme o movimento
         </label>
-        <div class="form-group" style="margin-bottom:0;">
-          <label class="form-label">Teto no pico (máx.)</label>
-          <input type="number" id="autoDispatchMax" value="4" min="1" max="4">
+        <div class="cfg-inline">
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label">Teto no pico (máx.)</label>
+            <input type="number" id="autoDispatchMax" value="4" min="1" max="4">
+          </div>
+          <div class="form-group" style="margin-bottom:0;">
+            <label class="form-label">Atualiza a cada (ms)</label>
+            <input type="number" id="autoDispatchInterval" value="2000" min="200" step="100">
+          </div>
         </div>
         <div class="help-box" style="margin-top:8px;">
           Regra: <b>máx = prontos ÷ entregadores disponíveis</b> (arredonda pra cima), travado entre <b>1</b> e o teto.
           Pouco pedido pra muita gente → cai pra 1 (espalha). Muda a config de despacho da loja no Foody.
-          Só grava quando o número muda. Padrão: <b>desligado</b>.
+          Só grava quando o número muda.<br>
+          ⚡ O <b>intervalo</b> é a rapidez com que o número reage: quanto menor, mais rápido —
+          mas cada volta é 1 consulta ao Foody, então valores muito baixos <b>martelam a API</b>
+          (risco de bloqueio/queda de sessão). Padrão: <b>desligado</b>, 2000ms.
         </div>
       </div>
 
@@ -1448,6 +1457,7 @@ async function loadAdminExtras() {
     const ad = access.autoDispatch || {};
     document.getElementById('autoDispatchEnabled').checked = !!ad.enabled;
     document.getElementById('autoDispatchMax').value       = ad.max || 4;
+    document.getElementById('autoDispatchInterval').value  = ad.intervalMs || 2000;
     const as = access.autoShift || {};
     document.getElementById('autoShiftEnabled').checked      = !!as.enabled;
     document.getElementById('autoShiftReactivateAt').value   = as.reactivateAt || '17:00';
@@ -1515,8 +1525,9 @@ async function saveSettings() {
     blockMin:     Math.max(1, parseInt(document.getElementById('autoBlockMinutes').value) || 30),
   };
   const autoDispatch = {
-    enabled: document.getElementById('autoDispatchEnabled').checked,
-    max:     Math.max(1, Math.min(4, parseInt(document.getElementById('autoDispatchMax').value) || 4)),
+    enabled:    document.getElementById('autoDispatchEnabled').checked,
+    max:        Math.max(1, Math.min(4, parseInt(document.getElementById('autoDispatchMax').value) || 4)),
+    intervalMs: Math.max(200, Math.min(60000, parseInt(document.getElementById('autoDispatchInterval').value) || 2000)),
   };
   const autoShift = {
     enabled:      document.getElementById('autoShiftEnabled').checked,
@@ -1537,6 +1548,10 @@ async function saveSettings() {
   }
   if (autoDispatch.enabled) {
     if (!confirm(`Você ativou o ajuste dinâmico de pedidos por entregador (teto ${autoDispatch.max}). Isso muda a config de despacho da loja no Foody automaticamente. Confirmar?`)) return;
+    if (autoDispatch.intervalMs < 1000) {
+      const perMin = Math.round(60000 / autoDispatch.intervalMs);
+      if (!confirm(`⚠️ Intervalo de ${autoDispatch.intervalMs}ms = ~${perMin} consultas/min só pra isso, além do monitor. Risco REAL de o Foody bloquear ou derrubar a sessão. Continuar mesmo assim?`)) return;
+    }
   }
   if (autoShift.enabled) {
     if (!confirm(`Você ativou o desligar/religar por expediente. Ao encerrar o turno, TODOS os entregadores conectados serão desligados (offline forçado) e só voltam às ${autoShift.reactivateAt}. Confirmar?`)) return;

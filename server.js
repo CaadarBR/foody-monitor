@@ -62,7 +62,7 @@ let config = {
   autoBlock: { enabled: false, thresholdMin: 15, blockMin: 30 },
   // Pedidos por entregador dinâmico: com pouco pedido pra muito entregador, baixa o limite pra
   // espalhar melhor. Regra: ceil(prontos ÷ disponíveis), travado entre 1 e max. Desligado por padrão.
-  autoDispatch: { enabled: false, max: 4 },
+  autoDispatch: { enabled: false, max: 4, intervalMs: 2000 },
   // Desliga todo mundo ao encerrar o expediente e reativa SÓ quem estava conectado, no horário
   // de volta (padrão 17:00 BRT, editável). Ação real e agressiva — desligado por padrão.
   autoShift: { enabled: false, reactivateAt: '17:00' },
@@ -967,6 +967,23 @@ const AUTODESPATCH_DEFAULTS = {
 };
 let lastMaxOrdersSet = null;
 
+// Reconta os pedidos PRONTOS sem entregador (numerador do máx). Só contam após READY_DELAY_MS
+// prontos. Usado pelo poll principal E pelo loop rápido do máx (compartilham readyOrderSince).
+function recomputeReadyCount(orders) {
+  const nowReady  = Date.now();
+  const readyList = (orders.pendingOrdersByCompany || []).filter(o => o.status === 'ready');
+  const readyKeys = new Set(readyList.map(o => o.uid || o.id));
+  for (const o of readyList) {
+    const k = o.uid || o.id;
+    if (!readyOrderSince.has(k)) readyOrderSince.set(k, nowReady);
+  }
+  for (const k of readyOrderSince.keys()) {
+    if (!readyKeys.has(k)) readyOrderSince.delete(k); // saiu de "pronto" (despachado/cancelado)
+  }
+  readyOrdersCount = readyList.filter(o => nowReady - readyOrderSince.get(o.uid || o.id) >= READY_DELAY_MS).length;
+  return readyOrdersCount;
+}
+
 // O máximo de entregas por entregador que a regra recomenda AGORA: ceil(prontos ÷ online),
 // travado entre 1 e o teto. Null se não tem ninguém online. Usado tanto pra aplicar (quando
 // ligado) quanto pra mostrar no cantinho do monitor (sempre).
@@ -1155,19 +1172,7 @@ async function doPoll() {
       console.log('[INFO] Monitoramento iniciado com sucesso.');
     }
 
-    // Pedidos prontos e sem entregador. Só contam como "esperando" após READY_DELAY_MS
-    // pronto — dá tempo do sistema despachar pra alguém antes de alertar.
-    const nowReady   = Date.now();
-    const readyList  = (orders.pendingOrdersByCompany || []).filter(o => o.status === 'ready');
-    const readyKeys  = new Set(readyList.map(o => o.uid || o.id));
-    for (const o of readyList) {
-      const k = o.uid || o.id;
-      if (!readyOrderSince.has(k)) readyOrderSince.set(k, nowReady);
-    }
-    for (const k of readyOrderSince.keys()) {
-      if (!readyKeys.has(k)) readyOrderSince.delete(k); // saiu de "pronto" (despachado/cancelado)
-    }
-    readyOrdersCount = readyList.filter(o => nowReady - readyOrderSince.get(o.uid || o.id) >= READY_DELAY_MS).length;
+    recomputeReadyCount(orders);
 
     trackOrderStages(orders.ordersByCourier || []);
     trackReassignments(orders.ordersByCourier || [], Date.now());
@@ -1249,6 +1254,31 @@ function schedulePoll() {
   }, Math.max(200, config.pollIntervalMs || 10000));
 }
 schedulePoll();
+
+// ── Loop RÁPIDO só do máx. de entregas por entregador ──────────────────────────
+// Independente do poll principal (10s): só quando o auto-dispatch está LIGADO, busca a lista
+// de pedidos (endpoint leve) num intervalo próprio editável (padrão 2s), reconta os prontos,
+// reaplica o máx se mudou e atualiza o cantinho na hora. Reusa courierMap (online) do poll.
+// ⚠️ Cada volta é 1 chamada ao Foody — quanto menor o intervalo, mais rápido reage, mas mais
+// martela a API (risco de bloqueio/queda de sessão). Piso de 200ms.
+let dispatchLoopRunning = false;
+function scheduleDispatchLoop() {
+  const ms = Math.max(200, parseInt((config.autoDispatch || {}).intervalMs) || 2000);
+  setTimeout(async () => {
+    if ((config.autoDispatch || {}).enabled && config.cookie && !dispatchLoopRunning && courierMap.size > 0) {
+      dispatchLoopRunning = true;
+      try {
+        const orders = await foodyFetch('https://app.foodydelivery.com/api/order/listbycourier');
+        recomputeReadyCount(orders);
+        await applyAutoDispatch();
+        broadcastState(); // atualiza o chip do máx na hora
+      } catch (e) { /* blip do Foody — ignora, tenta na próxima volta */ }
+      finally { dispatchLoopRunning = false; }
+    }
+    scheduleDispatchLoop();
+  }, ms);
+}
+scheduleDispatchLoop();
 
 // ── Rotas HTTP ────────────────────────────────────────────────────────────────
 
@@ -1551,8 +1581,9 @@ app.post('/api/admin/access', (req, res) => {
     const d = req.body.autoDispatch;
     config.autoDispatch = {
       ...config.autoDispatch,
-      enabled: !!d.enabled,
-      max:     Math.max(1, Math.min(4, parseInt(d.max) || 4)),
+      enabled:    !!d.enabled,
+      max:        Math.max(1, Math.min(4, parseInt(d.max) || 4)),
+      intervalMs: Math.max(200, Math.min(60000, parseInt(d.intervalMs) || 2000)),
     };
     lastMaxOrdersSet = null; // força reavaliar o número na próxima volta do poll
   }
