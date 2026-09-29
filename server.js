@@ -967,8 +967,14 @@ const AUTODESPATCH_DEFAULTS = {
 };
 let lastMaxOrdersSet = null;
 
-// Reconta os pedidos PRONTOS sem entregador (numerador do máx). Só contam após READY_DELAY_MS
-// prontos. Usado pelo poll principal E pelo loop rápido do máx (compartilham readyOrderSince).
+// Demanda pra efeito do cálculo do máx.: pedidos prontos EM ABERTO + pedidos DESPACHADOS que
+// o entregador ainda NÃO aceitou (ele ainda não assumiu, então continuam "na fila"). NÃO conta
+// os já aceitos / em rota (aí o entregador já assumiu). Sem delay — é a demanda real do momento.
+let dispatchDemandCount = 0;
+
+// Reconta os pedidos PRONTOS sem entregador (readyOrdersCount — usado pelos ALERTAS, com o
+// delay de READY_DELAY_MS) e a demanda pro despacho (dispatchDemandCount — abertos + despachados
+// não-aceitos). Usado pelo poll principal E pelo loop rápido do máx (compartilham readyOrderSince).
 function recomputeReadyCount(orders) {
   const nowReady  = Date.now();
   const readyList = (orders.pendingOrdersByCompany || []).filter(o => o.status === 'ready');
@@ -981,10 +987,19 @@ function recomputeReadyCount(orders) {
     if (!readyKeys.has(k)) readyOrderSince.delete(k); // saiu de "pronto" (despachado/cancelado)
   }
   readyOrdersCount = readyList.filter(o => nowReady - readyOrderSince.get(o.uid || o.id) >= READY_DELAY_MS).length;
+
+  // Demanda pro máx.: abertos (ready) + despachados não-aceitos (dispatched). Sem delay.
+  let dispatchedNotAccepted = 0;
+  for (const co of (orders.ordersByCourier || [])) {
+    for (const o of (co.orders || [])) {
+      if (o.status === 'dispatched') dispatchedNotAccepted++;
+    }
+  }
+  dispatchDemandCount = readyList.length + dispatchedNotAccepted;
   return readyOrdersCount;
 }
 
-// O máximo de entregas por entregador que a regra recomenda AGORA: ceil(prontos ÷ online),
+// O máximo de entregas por entregador que a regra recomenda AGORA: ceil(demanda ÷ online),
 // travado entre 1 e o teto. Null se não tem ninguém online. Usado tanto pra aplicar (quando
 // ligado) quanto pra mostrar no cantinho do monitor (sempre).
 function desiredMaxOrders() {
@@ -992,7 +1007,7 @@ function desiredMaxOrders() {
   const available = courierMap.size; // entregadores online neste ciclo
   if (available <= 0) return null;
   const cap = Math.max(1, Math.min(4, parseInt(ad.max) || 4));
-  return Math.max(1, Math.min(cap, Math.ceil(readyOrdersCount / available)));
+  return Math.max(1, Math.min(cap, Math.ceil(dispatchDemandCount / available)));
 }
 
 async function applyAutoDispatch() {
@@ -1005,8 +1020,8 @@ async function applyAutoDispatch() {
     await foodyPostForm('https://app.foodydelivery.com/api/company/autodespatch/config', payload);
     lastMaxOrdersSet = desired;
     const available = courierMap.size;
-    appendLog({ type: 'auto_dispatch', maxOrdersPerCourier: desired, available, ready: readyOrdersCount });
-    console.log(`[AUTO-DISPATCH] maxOrdersPerCourier = ${desired} (prontos ${readyOrdersCount} ÷ ${available} disp.)`);
+    appendLog({ type: 'auto_dispatch', maxOrdersPerCourier: desired, available, ready: dispatchDemandCount });
+    console.log(`[AUTO-DISPATCH] maxOrdersPerCourier = ${desired} (demanda ${dispatchDemandCount} ÷ ${available} disp.)`);
   } catch (e) {
     console.error('[AUTO-DISPATCH]', e.message);
   }
