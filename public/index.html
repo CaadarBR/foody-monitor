@@ -848,10 +848,14 @@
           🔔 Me avisar no <b>meu celular</b> (notificação push de "expediente encerrado")
         </label>
         <textarea id="shiftEndMsgText" maxlength="300" style="font-family:inherit;min-height:60px;">Expediente encerrado. Obrigado pelo trabalho de hoje! 🌙</textarea>
+        <button type="button" class="btn btn-secondary" style="font-size:12px;padding:6px 12px;margin-top:8px;" onclick="sendShiftEndTest()">📨 Enviar agora (teste)</button>
+        <div id="shiftEndTestResult" style="font-size:12px;margin-top:6px;"></div>
         <div class="help-box" style="margin-top:8px;">
-          Dispara <b>uma vez</b>, no encerramento do turno. A mensagem acima vai no chat do Foody de
-          cada entregador ativo (só se "Avisar os entregadores" estiver ligado — ⚠️ mensagem <b>REAL</b>).
+          Dispara <b>uma vez</b>, no encerramento do turno, pra <b>todos os entregadores que trabalharam
+          no turno</b> (não só os que ainda estão online no segundo do encerramento). Vai no chat do Foody
+          de cada um (só se "Avisar os entregadores" estiver ligado — ⚠️ mensagem <b>REAL</b>).
           O aviso no seu celular é independente. Padrão: entregadores <b>OFF</b>, seu celular <b>ON</b>.
+          <br>O botão <b>"Enviar agora (teste)"</b> manda na hora, ignorando o toggle — pra você conferir.
         </div>
       </div>
 
@@ -1446,6 +1450,28 @@ async function reactivateNow() {
       alert('Falhou: ' + (r.error || 'erro'));
     }
   } catch (e) { alert('Erro: ' + e.message); }
+}
+
+async function sendShiftEndTest() {
+  const out = document.getElementById('shiftEndTestResult');
+  const txt = document.getElementById('shiftEndMsgText').value.trim();
+  if (!confirm('Enviar a mensagem de fim de expediente AGORA pra todos os entregadores do turno? (mensagem REAL no chat do Foody)')) return;
+  out.textContent = 'Enviando…';
+  try {
+    const r = await fetch('/api/admin/shift-end/test', {
+      method: 'POST', headers: { 'x-admin-password': adminPass, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: txt }),
+    }).then(r => r.json());
+    if (r.ok) {
+      out.innerHTML = r.sent
+        ? `✅ Enviado pra <b>${r.sent}</b>: ${(r.names || []).join(', ')}`
+        : '⚠️ Ninguém pra avisar — nenhum entregador registrado neste turno ainda.';
+      out.style.color = r.sent ? 'var(--good, #10b981)' : 'var(--warn, #f59e0b)';
+    } else {
+      out.textContent = 'Falhou: ' + (r.error || 'erro');
+      out.style.color = 'var(--danger, #ef4444)';
+    }
+  } catch (e) { out.textContent = 'Erro: ' + e.message; out.style.color = 'var(--danger, #ef4444)'; }
 }
 
 async function loadAdminExtras() {

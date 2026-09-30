@@ -1143,20 +1143,38 @@ async function processAutoShift() {
   }
 }
 
-// Manda a mensagem única de "fim de expediente" pra todos os entregadores ativos (online no
-// monitor) quando o turno encerra. 1x por turno. Dedup por nome.
-function sendShiftEndMessages() {
+// Quem deve receber a mensagem de fim de expediente = todo entregador que trabalhou neste
+// turno. NÃO uso só o courierMap: no instante do encerramento a maioria já deslogou e foi
+// removida do mapa (~20s após sair), então a lista viria vazia. courierOnlineSince guarda
+// quem ficou online hoje (keyed por nome) e só zera na virada do turno (05h) — é a fonte certa.
+function shiftEndRecipients() {
+  return [...new Set([
+    ...courierOnlineSince.keys(),
+    ...[...courierMap.values()].map(c => c.name),
+  ].filter(Boolean))];
+}
+
+// Manda a mensagem única de "fim de expediente" pros entregadores do turno. 1x por turno no
+// automático. force=true ignora o toggle (usado pelo botão "enviar agora / teste"). Dedup por nome.
+function sendShiftEndMessages(force = false, overrideText = null) {
   const cfg = config.shiftEndMessage || {};
-  if (!cfg.enabled || !cfg.text) return;
-  const names = [...new Set([...courierMap.values()].map(c => c.name).filter(Boolean))];
-  if (!names.length) return;
+  if (!force && !cfg.enabled) return { sent: 0, names: [] };
+  const text = (overrideText && overrideText.trim())
+    || (cfg.text && cfg.text.trim())
+    || 'Expediente encerrado. Obrigado pelo trabalho de hoje! 🌙';
+  const names = shiftEndRecipients();
+  if (!names.length) {
+    console.log('[FIM-EXPEDIENTE] ninguém pra avisar (nenhum entregador registrado no turno)');
+    return { sent: 0, names: [] };
+  }
   for (const name of names) {
-    sendNudgeMessage(name, cfg.text)
-      .then(r => { appendLog({ type: 'shiftend_msg', courierName: r.courierName, msg: cfg.text }); console.log(`[FIM-EXPEDIENTE] → ${r.courierName}`); })
+    sendNudgeMessage(name, text)
+      .then(r => { appendLog({ type: 'shiftend_msg', courierName: r.courierName, msg: text }); console.log(`[FIM-EXPEDIENTE] → ${r.courierName}`); })
       .catch(e => console.error('[FIM-EXPEDIENTE]', name, e.message));
   }
-  appendLog({ type: 'shiftend_broadcast', count: names.length, names });
-  console.log(`[FIM-EXPEDIENTE] enviando pra ${names.length} entregadores ativos`);
+  appendLog({ type: 'shiftend_broadcast', count: names.length, names, forced: !!force });
+  console.log(`[FIM-EXPEDIENTE] enviando pra ${names.length}: ${names.join(', ')}`);
+  return { sent: names.length, names };
 }
 
 // ── Loop de polling ───────────────────────────────────────────────────────────
@@ -1412,6 +1430,21 @@ app.post('/api/nudge', async (req, res) => {
     res.json({ ok: true, ...r });
   } catch (e) {
     console.error('[NUDGE]', e.message);
+    res.status(502).json({ ok: false, error: e.message });
+  }
+});
+
+// Envia a mensagem de fim de expediente AGORA, na mão (teste). Ignora o toggle e manda pra
+// todos que trabalharam no turno. ADM MASTER. Retorna quantos e quem.
+app.post('/api/admin/shift-end/test', (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ ok: false, error: 'só ADM MASTER' });
+  try {
+    const override = (typeof req.body.text === 'string') ? req.body.text.slice(0, 300) : null;
+    const r = sendShiftEndMessages(true, override);
+    console.log(`[FIM-EXPEDIENTE] teste manual → ${r.sent} entregador(es)`);
+    res.json({ ok: true, ...r });
+  } catch (e) {
+    console.error('[FIM-EXPEDIENTE teste]', e.message);
     res.status(502).json({ ok: false, error: e.message });
   }
 });
