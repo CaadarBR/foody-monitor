@@ -975,6 +975,9 @@ let lastMaxOrdersSet = null;
 // o entregador ainda NÃO aceitou (ele ainda não assumiu, então continuam "na fila"). NÃO conta
 // os já aceitos / em rota (aí o entregador já assumiu). Sem delay — é a demanda real do momento.
 let dispatchDemandCount = 0;
+// Nomes dos entregadores com pedido ATIVO agora (onGoing/accepted/dispatched). Recontado a
+// cada ciclo em recomputeReadyCount. Usado pra dividir o máx só pelos LIVRES.
+let busyCourierNames = new Set();
 
 // Reconta os pedidos PRONTOS sem entregador (readyOrdersCount — usado pelos ALERTAS, com o
 // delay de READY_DELAY_MS) e a demanda pro despacho (dispatchDemandCount — abertos + despachados
@@ -993,12 +996,19 @@ function recomputeReadyCount(orders) {
   readyOrdersCount = readyList.filter(o => nowReady - readyOrderSince.get(o.uid || o.id) >= READY_DELAY_MS).length;
 
   // Demanda pro máx.: abertos (ready) + despachados não-aceitos (dispatched). Sem delay.
+  // Ao mesmo tempo, marca quem está OCUPADO (tem pedido ativo agora) — fresco a cada ciclo,
+  // pro cálculo do máx dividir só pelos entregadores LIVRES.
   let dispatchedNotAccepted = 0;
+  const busy = new Set();
   for (const co of (orders.ordersByCourier || [])) {
+    let hasActive = false;
     for (const o of (co.orders || [])) {
       if (o.status === 'dispatched') dispatchedNotAccepted++;
+      if (['onGoing', 'accepted', 'dispatched'].includes(o.status)) hasActive = true;
     }
+    if (hasActive) busy.add((co.courierName || '').trim());
   }
+  busyCourierNames = busy;
   dispatchDemandCount = readyList.length + dispatchedNotAccepted;
   return readyOrdersCount;
 }
@@ -1008,10 +1018,15 @@ function recomputeReadyCount(orders) {
 // ligado) quanto pra mostrar no cantinho do monitor (sempre).
 function desiredMaxOrders() {
   const ad = config.autoDispatch || {};
-  const available = courierMap.size; // entregadores online neste ciclo
-  if (available <= 0) return null;
+  const onlineNames = [...courierMap.values()].map(c => (c.name || '').trim()).filter(Boolean);
+  if (!onlineNames.length) return null; // ninguém online
   const cap = Math.max(1, Math.min(4, parseInt(ad.max) || 4));
-  return Math.max(1, Math.min(cap, Math.ceil(dispatchDemandCount / available)));
+  // Divisor = entregadores LIVRES pra receber (online e SEM pedido ativo agora). Quem está em
+  // rota não entra na conta — senão, com 2 prontos e 2 online (1 ocupado), dava ceil(2÷2)=1 e o
+  // entregador livre levava só 1 em vez dos 2. Trava em no mínimo 1 (nunca divide por zero).
+  const free = onlineNames.filter(n => !busyCourierNames.has(n)).length;
+  const divisor = Math.max(1, free);
+  return Math.max(1, Math.min(cap, Math.ceil(dispatchDemandCount / divisor)));
 }
 
 async function applyAutoDispatch() {
@@ -1023,9 +1038,10 @@ async function applyAutoDispatch() {
   try {
     await foodyPostForm('https://app.foodydelivery.com/api/company/autodespatch/config', payload);
     lastMaxOrdersSet = desired;
-    const available = courierMap.size;
-    appendLog({ type: 'auto_dispatch', maxOrdersPerCourier: desired, available, ready: dispatchDemandCount });
-    console.log(`[AUTO-DISPATCH] maxOrdersPerCourier = ${desired} (demanda ${dispatchDemandCount} ÷ ${available} disp.)`);
+    const online = courierMap.size;
+    const free = [...courierMap.values()].map(c => (c.name || '').trim()).filter(n => n && !busyCourierNames.has(n)).length;
+    appendLog({ type: 'auto_dispatch', maxOrdersPerCourier: desired, online, free, ready: dispatchDemandCount });
+    console.log(`[AUTO-DISPATCH] maxOrdersPerCourier = ${desired} (demanda ${dispatchDemandCount} ÷ ${Math.max(1, free)} livre(s); ${online} online)`);
   } catch (e) {
     console.error('[AUTO-DISPATCH]', e.message);
   }
