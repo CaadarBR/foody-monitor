@@ -1287,8 +1287,13 @@ async function doPoll() {
     }
     shiftIdle = idleNow;
 
-    // Auto-shift: encerrou → desliga todo mundo (guarda a lista pra reativar no horário).
-    if (idleNow && (config.autoShift || {}).enabled) {
+    // Auto-shift: encerrou o turno → desliga todo mundo (guarda a lista pra reativar no horário).
+    // ⚠️ GATE em isLateNightBRT() (00:00–05:00 BRT): o estado "loja fechada + sem pedido" também
+    // vale na janela do DIA e das 17h–18h ANTES de abrir — sem o gate, a função reativava às 17h
+    // e minutos depois (ainda fechado, pré-abertura) re-desligava todo mundo marcando a volta pra
+    // o DIA SEGUINTE, ficando num loop que derrubava quem reconectava. Só parkear no fim REAL do
+    // expediente (madrugada), nunca no pré-abertura. (fix 02/10/2026)
+    if (idleNow && isLateNightBRT() && (config.autoShift || {}).enabled) {
       autoShiftDisconnectAll().catch(e => console.error('[AUTO-SHIFT]', e.message));
     }
 
