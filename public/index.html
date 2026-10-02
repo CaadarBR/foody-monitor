@@ -577,6 +577,7 @@
     <span class="refresh-text" id="refreshText">–</span>
     <button class="btn-icon" onclick="forceRefresh()" title="Atualizar agora">🔄</button>
     <button class="btn-icon" onclick="openLog()" title="Histórico do turno">📋</button>
+    <button class="btn-icon" onclick="openPermanencia()" title="Pontos de Permanência">📍</button>
     <button class="btn-icon" onclick="openSettings()" title="Configurações">⚙️</button>
   </div>
 </header>
@@ -694,6 +695,34 @@
       </select>
     </div>
     <div class="log-entries" id="logEntries">
+      <div class="log-empty">Carregando...</div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Pontos de Permanência ── -->
+<div class="modal-overlay" id="permModal">
+  <div class="modal log-modal">
+    <div class="log-modal-header">
+      <div class="modal-title" style="margin:0;">📍 Pontos de Permanência</div>
+      <button class="btn-icon" onclick="closePermanencia()">✕</button>
+    </div>
+    <div class="log-controls">
+      <select class="log-date-sel" id="permTipo" onchange="loadPermanencia()">
+        <option value="todos">Livre + Com pedido</option>
+        <option value="livre">🅿️ Só livre (sem entrega)</option>
+        <option value="pedido">⏸️ Só com pedido</option>
+      </select>
+      <select class="log-date-sel" id="permDays" onchange="loadPermanencia()">
+        <option value="7">Últimos 7 dias</option>
+        <option value="30" selected>Últimos 30 dias</option>
+        <option value="90">Últimos 90 dias</option>
+        <option value="365">Todo o período</option>
+      </select>
+      <select class="log-date-sel" id="permCourier" onchange="loadPermanencia()"><option value="">Todos entregadores</option></select>
+      <button class="btn-icon" onclick="loadPermanencia()" title="Atualizar">🔄</button>
+    </div>
+    <div class="log-entries" id="permEntries">
       <div class="log-empty">Carregando...</div>
     </div>
   </div>
@@ -1127,6 +1156,54 @@ function closeLog() {
 
 async function reloadLog() {
   if (currentLogDate) await loadLog(currentLogDate);
+}
+
+// ── Pontos de Permanência ──────────────────────────────────────────────────────
+async function openPermanencia() {
+  document.getElementById('permModal').classList.add('open');
+  await loadPermanencia();
+}
+function closePermanencia() {
+  document.getElementById('permModal').classList.remove('open');
+}
+async function loadPermanencia() {
+  const tipo = document.getElementById('permTipo').value;
+  const days = document.getElementById('permDays').value;
+  const courier = document.getElementById('permCourier').value;
+  const cont = document.getElementById('permEntries');
+  cont.innerHTML = '<div class="log-empty">Carregando...</div>';
+  let data;
+  try {
+    const qs = new URLSearchParams({ tipo, days, courier });
+    data = await fetch('/api/permanencia?' + qs, { headers: adminPass ? { 'x-admin-password': adminPass } : {} }).then(r => r.json());
+  } catch (e) { cont.innerHTML = '<div class="log-empty">Erro ao carregar.</div>'; return; }
+
+  // Popula o seletor de entregadores uma vez (preserva a seleção atual)
+  const sel = document.getElementById('permCourier');
+  if (sel.options.length <= 1 && Array.isArray(data.couriers)) {
+    for (const c of data.couriers) { const o = document.createElement('option'); o.value = c; o.textContent = c; sel.appendChild(o); }
+    sel.value = courier;
+  }
+
+  const spots = data.spots || [];
+  if (!spots.length) { cont.innerHTML = '<div class="log-empty">Nenhum ponto de permanência no período/filtro.</div>'; return; }
+  const totalParadas = spots.reduce((s, p) => s + p.count, 0);
+  const fmt = iso => { try { return new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }); } catch { return '—'; } };
+  cont.innerHTML =
+    `<div style="padding:8px 4px;font-size:12px;opacity:.75;">📍 ${spots.length} local(is) · ${totalParadas} parada(s) · ordenado pelos mais recorrentes</div>` +
+    spots.map((p, i) => {
+      const ents = p.entregadores.slice(0, 6).map(e => `${e.nome} (${e.vezes})`).join(', ') + (p.entregadores.length > 6 ? '…' : '');
+      return `
+      <div class="log-entry log-danger">
+        <div style="flex:1;">
+          <div style="font-weight:700;">#${i + 1} · ${p.count}x parada(s)
+            &nbsp; <span style="color:#86efac;">🅿️ ${p.livre} livre</span> · <span style="color:#fbbf24;">⏸️ ${p.pedido} c/ pedido</span></div>
+          <div style="font-size:12px;opacity:.85;margin-top:2px;">👥 ${ents}</div>
+          <div style="font-size:11px;opacity:.6;margin-top:2px;">entre ${fmt(p.primeiro)} e ${fmt(p.ultimo)} ·
+            <a class="coord-link" href="https://www.google.com/maps?q=${p.lat},${p.lng}" target="_blank" rel="noopener">📍 abrir no mapa (${p.lat}, ${p.lng})</a></div>
+        </div>
+      </div>`;
+    }).join('');
 }
 
 async function loadLogDates() {

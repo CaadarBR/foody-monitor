@@ -1852,6 +1852,54 @@ app.get('/api/logs', (req, res) => {
   }
 });
 
+// Pontos de Permanência: agrega os registros de parada longa (idlefree = livre / stationary =
+// com pedido) já gravados nos logs diários, agrupando por proximidade (~55m) pra destacar os
+// locais RECORRENTES. Filtros: ?days= (período) &tipo=livre|pedido|todos &courier=<nome>.
+app.get('/api/permanencia', (req, res) => {
+  if (!hasDataAccess(req)) return res.status(401).json({ spots: [], couriers: [] });
+  const days = Math.min(Math.max(parseInt(req.query.days) || 30, 1), 365);
+  const tipo = req.query.tipo || 'todos';
+  const courier = (req.query.courier || '').trim().toLowerCase();
+  let files;
+  try {
+    files = fs.readdirSync(LOGS_DIR).filter(f => /^\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort().reverse().slice(0, days);
+  } catch (e) { return res.json({ spots: [], couriers: [] }); }
+
+  const GRID = 0.0005; // ~55m por célula de agrupamento
+  const buckets = new Map();
+  const couriersSet = new Set();
+  for (const f of files) {
+    let logs = [];
+    try { logs = JSON.parse(fs.readFileSync(path.join(LOGS_DIR, f), 'utf8')); } catch (e) { continue; }
+    for (const e of logs) {
+      if (e.type !== 'alert' || (e.alertType !== 'idlefree' && e.alertType !== 'stationary')) continue;
+      if (typeof e.lat !== 'number' || typeof e.lng !== 'number') continue;
+      const nome = e.courierName || '—';
+      couriersSet.add(nome);
+      const livre = e.alertType === 'idlefree';
+      if (tipo === 'livre' && !livre) continue;
+      if (tipo === 'pedido' && livre) continue;
+      if (courier && nome.toLowerCase() !== courier) continue;
+      const key = Math.round(e.lat / GRID) + ',' + Math.round(e.lng / GRID);
+      let b = buckets.get(key);
+      if (!b) { b = { latSum: 0, lngSum: 0, count: 0, livre: 0, pedido: 0, porEntregador: {}, primeiro: e.timestamp, ultimo: e.timestamp }; buckets.set(key, b); }
+      b.latSum += e.lat; b.lngSum += e.lng; b.count++;
+      if (livre) b.livre++; else b.pedido++;
+      b.porEntregador[nome] = (b.porEntregador[nome] || 0) + 1;
+      if (e.timestamp < b.primeiro) b.primeiro = e.timestamp;
+      if (e.timestamp > b.ultimo) b.ultimo = e.timestamp;
+    }
+  }
+  const spots = [...buckets.values()].map(b => ({
+    lat: +(b.latSum / b.count).toFixed(6),
+    lng: +(b.lngSum / b.count).toFixed(6),
+    count: b.count, livre: b.livre, pedido: b.pedido,
+    entregadores: Object.entries(b.porEntregador).sort((a, c) => c[1] - a[1]).map(([n, q]) => ({ nome: n, vezes: q })),
+    primeiro: b.primeiro, ultimo: b.ultimo,
+  })).sort((a, b) => b.count - a.count);
+  res.json({ spots, couriers: [...couriersSet].sort(), dias: days, tipo });
+});
+
 // Diagnóstico do armazenamento — por que o histórico não persiste?
 // Testa escrita real em logs/, lista os arquivos e mostra espaço em disco.
 app.get('/api/diag', (req, res) => {
