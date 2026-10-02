@@ -681,6 +681,8 @@
         <option value="dropped">🚨 Desconectou com pedido</option>
         <option value="reassigned">🔁 Pedido reatribuído</option>
         <option value="stationary">⏸️ Parado no mesmo local</option>
+        <option value="idlefree">🅿️ Livre e parado (demora pra voltar)</option>
+        <option value="willlate">⏰ Pedido vai atrasar</option>
         <option value="zone">📍 Zona (entrou/saiu)</option>
         <option value="single">✅ Saiu com 1 pedido</option>
         <option value="block">⛔ Desconectado (block)</option>
@@ -1273,7 +1275,7 @@ function renderLog() {
         ? ` <a class="coord-link" href="https://www.google.com/maps?q=${e.lat},${e.lng}" target="_blank" rel="noopener" title="Abrir no Google Maps">${e.lat}, ${e.lng}</a>`
         : '';
       const nul = e.gpsNull ? ` <span class="gps-null">null</span>` : '';
-      const ico = e.alertType === 'missing' ? '🚨' : e.alertType === 'dropped' ? '🚨' : e.alertType === 'reassigned' ? '🔁' : e.alertType === 'stationary' ? '⏸️' : e.alertType === 'zone' ? '📍' : e.alertType === 'cookie' ? '🍪' : e.alertType === 'single' ? '✅' : e.alertType === 'block' ? '⛔' : e.alertType === 'unblock' ? '✅' : (e.alertType === 'accept' || e.alertType === 'depart') ? '⏳' : '⚠️';
+      const ico = e.alertType === 'missing' ? '🚨' : e.alertType === 'dropped' ? '🚨' : e.alertType === 'reassigned' ? '🔁' : e.alertType === 'stationary' ? '⏸️' : e.alertType === 'idlefree' ? '🅿️' : e.alertType === 'willlate' ? '⏰' : e.alertType === 'zone' ? '📍' : e.alertType === 'cookie' ? '🍪' : e.alertType === 'single' ? '✅' : e.alertType === 'block' ? '⛔' : e.alertType === 'unblock' ? '✅' : (e.alertType === 'accept' || e.alertType === 'depart') ? '⏳' : '⚠️';
       return `
       <div class="log-entry ${e.alertType === 'single' || e.alertType === 'unblock' ? 'log-success' : 'log-danger'}">
         <span class="log-time">${time}</span><span>${ico}</span>
@@ -1739,10 +1741,12 @@ async function dismissAlert(id) {
 
 // Texto padrão da mensagem pro entregador, por tipo de alerta
 const NUDGE_DEFAULTS = {
-  slow:    'Pedido pronto aguardando para entrega',
-  missing: 'App Desconectado',
-  accept:  'Favor aceitar o pedido',
-  depart:  'Favor sair para entrega',
+  slow:     'Pedido pronto aguardando para entrega',
+  missing:  'App Desconectado',
+  accept:   'Favor aceitar o pedido',
+  depart:   'Favor sair para entrega',
+  idlefree: 'Favor retornar à loja para a próxima entrega',
+  willlate: 'Seu pedido está perto de atrasar — por favor, saia para a entrega o quanto antes!',
 };
 
 // Hora do alerta: só a hora se for de hoje; senão "ontem HH:MM" ou "DD/MM HH:MM"
@@ -1772,8 +1776,8 @@ function updateAlertTimers() {
 }
 
 function alertCardHtml(a) {
-  const cls  = a.type === 'missing' || a.type === 'dropped' || a.type === 'cookie' || a.type === 'block' ? 'danger' : a.type === 'single' || a.type === 'shiftEnd' || a.type === 'unblock' || a.type === 'autoshifton' ? 'good' : 'warn';
-  const icon = a.type === 'missing' ? '🚨' : a.type === 'dropped' ? '🚨' : a.type === 'reassigned' ? '🔁' : a.type === 'stationary' ? '⏸️' : a.type === 'zone' ? '📍' : a.type === 'cookie' ? '🍪' : a.type === 'single' ? '✅' : a.type === 'shiftEnd' ? '🌙' : a.type === 'block' ? '⛔' : a.type === 'unblock' ? '✅' : a.type === 'autoshift' ? '🌙' : a.type === 'autoshifton' ? '☀️' : (a.type === 'accept' || a.type === 'depart') ? '⏳' : '⚠️';
+  const cls  = a.type === 'missing' || a.type === 'dropped' || a.type === 'cookie' || a.type === 'block' || a.type === 'willlate' ? 'danger' : a.type === 'single' || a.type === 'shiftEnd' || a.type === 'unblock' || a.type === 'autoshifton' ? 'good' : 'warn';
+  const icon = a.type === 'missing' ? '🚨' : a.type === 'dropped' ? '🚨' : a.type === 'reassigned' ? '🔁' : a.type === 'stationary' ? '⏸️' : a.type === 'idlefree' ? '🅿️' : a.type === 'willlate' ? '⏰' : a.type === 'zone' ? '📍' : a.type === 'cookie' ? '🍪' : a.type === 'single' ? '✅' : a.type === 'shiftEnd' ? '🌙' : a.type === 'block' ? '⛔' : a.type === 'unblock' ? '✅' : a.type === 'autoshift' ? '🌙' : a.type === 'autoshifton' ? '☀️' : (a.type === 'accept' || a.type === 'depart') ? '⏳' : '⚠️';
   const nudgeDefault = NUDGE_DEFAULTS[a.type];
   return `
     <div class="alert-card ${cls}">

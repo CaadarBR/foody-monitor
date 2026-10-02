@@ -32,6 +32,7 @@ const DEFAULT_AUTO_MESSAGES = {
   accept:     { label: 'Demora pra aceitar',    icon: '⏳', text: 'Favor aceitar o pedido' },
   depart:     { label: 'Demora pra sair',       icon: '⏳', text: 'Favor sair para entrega' },
   stationary: { label: 'Parado no mesmo local', icon: '⏸️', text: 'Está tudo certo? Notamos uma parada mais longa.' },
+  idlefree:   { label: 'Livre e parado',        icon: '🅿️', text: 'Você está livre e parado há um tempo — se puder, retorne à loja para a próxima entrega. 🛵' },
   missing:    { label: 'Sumiu / desconectou',   icon: '🚨', text: 'App Desconectado' },
 };
 
@@ -70,6 +71,10 @@ let config = {
   //  - enabled     → manda no chat do Foody pra todos os entregadores ativos (padrão OFF).
   //  - notifyOwner → manda a notificação push pro celular do John (padrão ON).
   shiftEndMessage: { enabled: false, notifyOwner: true, text: 'Expediente encerrado. Obrigado pelo trabalho de hoje! 🌙' },
+  // "PEDIDO VAI ATRASAR": pedido mandado pro entregador que ele NÃO aceitou em notAcceptedMin
+  // E o prazo de entrega (deliveryDueDate) está a <= slaLeftMin de estourar → manda msg REAL
+  // automática pro entregador. ATIVO por padrão (pedido do John, 02/10). Tempos/texto editáveis.
+  willLate: { enabled: true, notAcceptedMin: 5, slaLeftMin: 10, text: '⚠️ {PEDIDO} está perto do prazo de entrega — por favor aceite e saia AGORA pra não atrasar! 🛵' },
   zones: [],            // cercas virtuais: [{ id, name, polygon: [[lat,lng],...] }]
 };
 
@@ -93,6 +98,7 @@ function loadConfig() {
       if (saved.autoDispatch && typeof saved.autoDispatch === 'object') config.autoDispatch = { ...config.autoDispatch, ...saved.autoDispatch };
       if (saved.autoShift && typeof saved.autoShift === 'object') config.autoShift = { ...config.autoShift, ...saved.autoShift };
       if (saved.shiftEndMessage && typeof saved.shiftEndMessage === 'object') config.shiftEndMessage = { ...config.shiftEndMessage, ...saved.shiftEndMessage };
+      if (saved.willLate && typeof saved.willLate === 'object') config.willLate = { ...config.willLate, ...saved.willLate };
       if (Array.isArray(saved.zones)) config.zones = saved.zones;
     } catch (e) {}
   }
@@ -580,6 +586,8 @@ function addAlert(type, msg, courierName = null, extra = {}, opts = {}) {
       : type === 'dropped'   ? '🚨 Desconectou com pedido'
       : type === 'reassigned'? '🔁 Pedido reatribuído'
       : type === 'stationary'? '⏸️ Parado no mesmo local'
+      : type === 'idlefree'  ? '🅿️ Livre e parado — demora pra retornar'
+      : type === 'willlate'  ? '⏰ Pedido vai atrasar!'
       : type === 'zone'      ? '📍 Zona'
       : type === 'single'    ? '✅ Saiu com 1 entrega'
       : type === 'cookie'    ? '🍪 Cookie expirado!'
@@ -609,6 +617,23 @@ function orderNumberOf(o) {
   return o.orderNumber ?? o.number ?? o.code ?? o.orderCode ?? o.orderId ?? o.id ?? null;
 }
 
+// Prazo de entrega (ms, epoch) do pedido. O Foody varia o nome do campo e o formato, então
+// tenta vários nomes e aceita ISO ou "DD/MM/YYYY HH:mm" (em BRT). Retorna null se não achar.
+function orderDueMs(o) {
+  const raw = o.deliveryDueDate || o.dueDate || o.deliveryForecast || o.forecast
+    || o.estimatedDeliveryDate || o.estimatedDeliveryTime || o.maxDeliveryDate
+    || o.promisedDeliveryDate || o.deliveryForecastDate || null;
+  if (!raw) return null;
+  const iso = Date.parse(raw);
+  if (!isNaN(iso)) return iso;
+  const m = String(raw).match(/^(\d{2})\/(\d{2})\/(\d{4})[ T](\d{2}):(\d{2})/);
+  if (m) return Date.UTC(+m[3], +m[2] - 1, +m[1], +m[4] + 3, +m[5], 0, 0); // "DD/MM/YYYY HH:mm" BRT → UTC
+  return null;
+}
+// Loga UMA vez os campos de um pedido real — pra confirmar o nome certo do campo de prazo
+// depois do deploy (o 'willlate' depende dele). Ver [DIAG] nos logs do PM2.
+let _loggedOrderKeys = false;
+
 // O entregador JÁ SAIU da loja? (GPS mais longe que o raio da loja). Serve pra não
 // alarmar "aceitou e não saiu" quando o cara já está na rua entregando — o status do
 // Foody só ficou preso em 'accepted' porque ele não tocou "sair pra entrega" no app.
@@ -628,6 +653,12 @@ function courierDepartedStore(name) {
 function trackOrderStages(ordersByCourierList) {
   const now  = Date.now();
   const seen = new Set();
+  // DIAG (1x): loga os campos de um pedido real pra confirmar o nome do campo de prazo do willlate.
+  if (!_loggedOrderKeys) {
+    for (const co of ordersByCourierList || []) {
+      if (co.orders && co.orders[0]) { _loggedOrderKeys = true; console.log('[DIAG] campos do pedido:', Object.keys(co.orders[0]).join(', ')); break; }
+    }
+  }
   for (const co of ordersByCourierList || []) {
     const courier = (co.courierName || '').trim();
     for (const o of co.orders || []) {
@@ -665,6 +696,27 @@ function trackOrderStages(ordersByCourierList) {
             prev.alerted = true; prev.alertId = al.id;
             maybeAutoMessage('depart', courier);
           }
+        }
+      }
+
+      // PEDIDO VAI ATRASAR: recebeu o pedido, NÃO aceitou em notAcceptedMin, e o prazo de
+      // entrega está a <= slaLeftMin de estourar → manda msg REAL pro entregador (1x por pedido).
+      // Mesma trava de GPS: se já saiu da loja, não é esse caso. ATIVO por padrão.
+      const wl = config.willLate || {};
+      if (wl.enabled !== false && o.status === 'dispatched' && !prev.willlateAlerted &&
+          now - prev.since >= (wl.notAcceptedMin ?? 5) * 60000 &&
+          !courierDepartedStore(courier)) {
+        const dueMs = orderDueMs(o);
+        if (dueMs != null && (dueMs - now) <= (wl.slaLeftMin ?? 10) * 60000) {
+          prev.willlateAlerted = true;
+          const faltam = Math.round((dueMs - now) / 60000);
+          const quando = faltam >= 0 ? `faltam ~${faltam}min pro prazo` : `prazo já estourou há ${-faltam}min`;
+          addAlert('willlate', `${courier} não aceitou o #${prev.num} e ${quando} — VAI ATRASAR!`, courier, { stageSince: prev.since });
+          const txt = (wl.text || '⚠️ {PEDIDO} está perto do prazo — aceite e saia AGORA!').replace(/{PEDIDO}/g, `#${prev.num}`);
+          sendNudgeMessage(courier, txt)
+            .then(() => appendLog({ type: 'auto_willlate', courierName: courier, num: prev.num }))
+            .catch(e => console.error('[WILLLATE]', e.message));
+          console.log(`[WILLLATE] ${courier} #${prev.num} — ${quando}`);
         }
       }
 
@@ -796,9 +848,16 @@ function processTracking(trackingList, ordersByCourierList) {
         const sc = storeCoords();
         const atStore = sc && haversineM(clat, clng, sc.lat, sc.lng) < STORE_RADIUS_M;
         if (!atStore) {
-          const al = addAlert('stationary', `${cs.name} parado no mesmo local há 10min`, cs.name, { lat: clat, lng: clng, stageSince: cs.stSince });
+          // LIVRE (sem pedido na mão) + parado longe da loja = demorando pra retornar → alerta próprio.
+          // COM pedido + parado = pode ser problema NA entrega → mantém o 'stationary'.
+          const livre = (cs.activeOrderCount || 0) === 0;
+          const tipo = livre ? 'idlefree' : 'stationary';
+          const texto = livre
+            ? `${cs.name} está LIVRE e parado há 10min — demorando pra retornar`
+            : `${cs.name} parado no mesmo local há 10min`;
+          const al = addAlert(tipo, texto, cs.name, { lat: clat, lng: clng, stageSince: cs.stSince });
           cs.stAlerted = true; cs.stAlertId = al.id;
-          maybeAutoMessage('stationary', cs.name);
+          maybeAutoMessage(tipo, cs.name);
         }
       }
 
@@ -1653,6 +1712,7 @@ app.get('/api/admin/access', (req, res) => {
     autoDispatch:   config.autoDispatch || { enabled: false, max: 4 },
     autoShift:      config.autoShift || { enabled: false, reactivateAt: '17:00' },
     shiftEndMessage: config.shiftEndMessage || { enabled: false, notifyOwner: true, text: '' },
+    willLate:       config.willLate || { enabled: true, notAcceptedMin: 5, slaLeftMin: 10, text: '' },
     autoShiftPending: {
       phase:        autoShiftState.phase,
       count:        (autoShiftState.list || []).length,
@@ -1704,6 +1764,17 @@ app.post('/api/admin/access', (req, res) => {
       enabled:     !!s.enabled,
       notifyOwner: s.notifyOwner !== false, // padrão ON — só desliga se mandar explicitamente false
       text:        (typeof s.text === 'string' && s.text.trim()) ? s.text.trim().slice(0, 300) : (config.shiftEndMessage?.text || 'Expediente encerrado. Obrigado pelo trabalho de hoje! 🌙'),
+    };
+  }
+  if (req.body.willLate && typeof req.body.willLate === 'object') {
+    const w = req.body.willLate;
+    const cur = config.willLate || {};
+    const num = (v, def) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : def; };
+    config.willLate = {
+      enabled:        w.enabled !== false, // padrão ON — só desliga se mandar explicitamente false
+      notAcceptedMin: num(w.notAcceptedMin, cur.notAcceptedMin || 5),
+      slaLeftMin:     num(w.slaLeftMin, cur.slaLeftMin || 10),
+      text:           (typeof w.text === 'string' && w.text.trim()) ? w.text.trim().slice(0, 300) : (cur.text || '⚠️ {PEDIDO} está perto do prazo de entrega — por favor aceite e saia AGORA pra não atrasar! 🛵'),
     };
   }
   saveConfig();
