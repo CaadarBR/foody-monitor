@@ -1193,6 +1193,32 @@ function sendShiftEndMessages(force = false, overrideText = null) {
   return { sent: names.length, names };
 }
 
+// Versão do teste manual: AGUARDA cada envio e devolve o resultado por entregador (quem recebeu
+// e quem falhou, com motivo). É um diagnóstico — pelo botão "Enviar agora (teste)".
+async function sendShiftEndTestDetailed(overrideText = null) {
+  const cfg = config.shiftEndMessage || {};
+  const text = (overrideText && overrideText.trim())
+    || (cfg.text && cfg.text.trim())
+    || 'Expediente encerrado. Obrigado pelo trabalho de hoje! 🌙';
+  const names = shiftEndRecipients();
+  const results = [];
+  for (const name of names) {
+    try {
+      const r = await sendNudgeMessage(name, text);
+      appendLog({ type: 'shiftend_msg', courierName: r.courierName, msg: text, test: true });
+      results.push({ name: r.courierName, ok: true });
+      console.log(`[FIM-EXPEDIENTE teste] → ${r.courierName}`);
+    } catch (e) {
+      results.push({ name, ok: false, error: e.message });
+      console.error(`[FIM-EXPEDIENTE teste] falhou ${name}: ${e.message}`);
+    }
+  }
+  appendLog({ type: 'shiftend_broadcast', count: names.length, names, forced: true, test: true });
+  const sent = results.filter(r => r.ok).map(r => r.name);
+  const failed = results.filter(r => !r.ok);
+  return { recipients: names, sent, failed };
+}
+
 // ── Loop de polling ───────────────────────────────────────────────────────────
 
 async function doPoll() {
@@ -1452,12 +1478,12 @@ app.post('/api/nudge', async (req, res) => {
 
 // Envia a mensagem de fim de expediente AGORA, na mão (teste). Ignora o toggle e manda pra
 // todos que trabalharam no turno. ADM MASTER. Retorna quantos e quem.
-app.post('/api/admin/shift-end/test', (req, res) => {
+app.post('/api/admin/shift-end/test', async (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ ok: false, error: 'só ADM MASTER' });
   try {
     const override = (typeof req.body.text === 'string') ? req.body.text.slice(0, 300) : null;
-    const r = sendShiftEndMessages(true, override);
-    console.log(`[FIM-EXPEDIENTE] teste manual → ${r.sent} entregador(es)`);
+    const r = await sendShiftEndTestDetailed(override);
+    console.log(`[FIM-EXPEDIENTE] teste manual → ${r.sent.length} ok, ${r.failed.length} falha(s)`);
     res.json({ ok: true, ...r });
   } catch (e) {
     console.error('[FIM-EXPEDIENTE teste]', e.message);

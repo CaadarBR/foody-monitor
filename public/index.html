@@ -1364,6 +1364,9 @@ async function renderSettingsGate() {
 
 // ─── Mensagens padrão / automáticas ──────────────────────────────────────────
 let autoMessagesCache = {};
+// Estado LIGADO/DESLIGADO carregado do servidor — pra só confirmar quando o ADM ATIVA algo
+// agora (OFF→ON), em vez de pedir confirmação toda vez que salva com a opção já ligada.
+let accessCache = {};
 
 function renderAutoMessages(messages) {
   autoMessagesCache = messages || {};
@@ -1463,10 +1466,20 @@ async function sendShiftEndTest() {
       body: JSON.stringify({ text: txt }),
     }).then(r => r.json());
     if (r.ok) {
-      out.innerHTML = r.sent
-        ? `✅ Enviado pra <b>${r.sent}</b>: ${(r.names || []).join(', ')}`
-        : '⚠️ Ninguém pra avisar — nenhum entregador registrado neste turno ainda.';
-      out.style.color = r.sent ? 'var(--good, #10b981)' : 'var(--warn, #f59e0b)';
+      const sent = r.sent || [];
+      const failed = r.failed || [];
+      if (!(r.recipients || []).length) {
+        out.innerHTML = '⚠️ Ninguém pra avisar — nenhum entregador registrado neste turno ainda. Teste durante o expediente, com entregador online.';
+        out.style.color = 'var(--warn, #f59e0b)';
+      } else {
+        let html = sent.length ? `✅ Enviado pra <b>${sent.length}</b>: ${sent.join(', ')}` : '';
+        if (failed.length) {
+          html += (html ? '<br>' : '') + `❌ Falhou pra <b>${failed.length}</b>: ` +
+            failed.map(f => `${f.name} (${f.error})`).join('; ');
+        }
+        out.innerHTML = html;
+        out.style.color = failed.length ? 'var(--danger, #ef4444)' : 'var(--good, #10b981)';
+      }
     } else {
       out.textContent = 'Falhou: ' + (r.error || 'erro');
       out.style.color = 'var(--danger, #ef4444)';
@@ -1497,6 +1510,14 @@ async function loadAdminExtras() {
     document.getElementById('shiftEndMsgEnabled').checked     = !!sem.enabled;
     document.getElementById('shiftEndMsgNotifyOwner').checked = sem.notifyOwner !== false;
     if (sem.text) document.getElementById('shiftEndMsgText').value = sem.text;
+    // Guarda o que já estava LIGADO — pra confirmar só quando ativar algo novo.
+    accessCache = {
+      autoBlock:            !!ab.enabled,
+      autoDispatch:         !!ad.enabled,
+      autoDispatchInterval: ad.intervalMs || 2000,
+      autoShift:            !!as.enabled,
+      shiftEndMessage:      !!sem.enabled,
+    };
   }
 
   const msgs = await fetch('/api/admin/messages', { headers }).then(r => r.json()).catch(() => null);
@@ -1576,20 +1597,21 @@ async function saveSettings() {
   if (newAutoMsg) {
     if (!confirm('Você ativou MENSAGEM automática. Ela vai ser enviada de verdade pro entregador no chat do Foody quando o alerta disparar. Confirmar?')) return;
   }
-  if (autoBlock.enabled) {
+  if (autoBlock.enabled && !accessCache.autoBlock) {
     if (!confirm(`Você ativou o BLOCK automático. Quem segurar um pedido sem aceitar por ${autoBlock.thresholdMin}min vai ser DESCONECTADO (offline forçado) por ${autoBlock.blockMin}min. Confirmar?`)) return;
   }
-  if (autoDispatch.enabled) {
+  if (autoDispatch.enabled && !accessCache.autoDispatch) {
     if (!confirm(`Você ativou o ajuste dinâmico de pedidos por entregador (teto ${autoDispatch.max}). Isso muda a config de despacho da loja no Foody automaticamente. Confirmar?`)) return;
-    if (autoDispatch.intervalMs < 1000) {
-      const perMin = Math.round(60000 / autoDispatch.intervalMs);
-      if (!confirm(`⚠️ Intervalo de ${autoDispatch.intervalMs}ms = ~${perMin} consultas/min só pra isso, além do monitor. Risco REAL de o Foody bloquear ou derrubar a sessão. Continuar mesmo assim?`)) return;
-    }
   }
-  if (autoShift.enabled) {
+  const intervalFicouBaixo = autoDispatch.intervalMs < 1000 && (!accessCache.autoDispatch || (accessCache.autoDispatchInterval || 2000) >= 1000);
+  if (autoDispatch.enabled && intervalFicouBaixo) {
+    const perMin = Math.round(60000 / autoDispatch.intervalMs);
+    if (!confirm(`⚠️ Intervalo de ${autoDispatch.intervalMs}ms = ~${perMin} consultas/min só pra isso, além do monitor. Risco REAL de o Foody bloquear ou derrubar a sessão. Continuar mesmo assim?`)) return;
+  }
+  if (autoShift.enabled && !accessCache.autoShift) {
     if (!confirm(`Você ativou o desligar/religar por expediente. Ao encerrar o turno, TODOS os entregadores conectados serão desligados (offline forçado) e só voltam às ${autoShift.reactivateAt}. Confirmar?`)) return;
   }
-  if (shiftEndMessage.enabled) {
+  if (shiftEndMessage.enabled && !accessCache.shiftEndMessage) {
     if (!confirm('Você ativou a MENSAGEM de fim de expediente. Ela será enviada de verdade pra todos os entregadores ativos quando o turno encerrar. Confirmar?')) return;
   }
 
