@@ -15,6 +15,19 @@ Existem DOIS sistemas que falam com o **mesmo Foody** (mesma conta/sessão) e **
 
 **Consequência prática:** se um courier aparece/some como ativo/online, offline, ou "algo desativando de novo", **NÃO assuma que é só este projeto** — pode ser o `\entregas` (`syncFoody`) ou vice-versa. Os dois disputam o toggle do Foody e somam carga na API. Ao debugar Foody, abra os dois e cheque qual está agindo.
 
+# 💡 Ideias pendentes (não construídas)
+
+- **Agrupar por localização quando sai com 1** — quando o entregador sai com só 1 pedido,
+  checar se tinha outro pedido pronto/na fila indo pra PERTO (raio em metros, ex 500m) + pronto
+  na mesma janela de tempo → avisar que dava pra agrupar. Alerta (🧩) + msg opcional. Depende da
+  **coordenada do destino** do pedido (confirmar nos campos via `[DIAG]`).
+- **5º pedido como última entrega (auto-dispatch oportunista)** — hoje o máx/entregador é 4
+  (`config.autoDispatch.max`). Permitir/sugerir um 5º pedido ACIMA do máx QUANDO: (a) o pedido
+  está pronto com **prazo baixo** (urgente), (b) o destino fica na **mesma região/rota** dos que
+  o cara já vai levar, e (c) entraria como a **ÚLTIMA parada** — aí o tempo ainda fica OK e o
+  entregador já está na região. "Encaixe" oportunista aproveitando que já tem alguém indo pra lá.
+  Depende de: coords do destino + `deliveryDueDate` (já confirmado que existe) + ordem/rota.
+
 # Infra / deploy
 Git `main`. O deploy é por webhook do Easypanel (ver skill `/easypanel`). Working tree pode ficar
 ATRASADO em relação ao origin — sempre `git fetch` + conferir antes de editar (em 02/10 o local
