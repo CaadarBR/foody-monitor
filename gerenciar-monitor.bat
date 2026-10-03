@@ -1,6 +1,7 @@
 @echo off
 title Foody Monitor - Gerenciar
 chcp 65001 > nul
+cd /d "%~dp0"
 
 :menu
 cls
@@ -19,6 +20,7 @@ echo   [3] Iniciar o monitor
 echo   [4] Reiniciar o monitor
 echo   [5] Ver logs em tempo real
 echo   [6] Ver meu IP (para acesso pelo celular)
+echo   [7] ATUALIZAR (git pull + reiniciar)  ^<== pega as novidades
 echo   [0] Sair
 echo.
 set /p opcao="  Escolha: "
@@ -28,6 +30,7 @@ if "%opcao%"=="2" ( pm2 stop foody-monitor & echo Monitor parado. & pause & goto
 if "%opcao%"=="3" ( pm2 start foody-monitor & echo Monitor iniciado. & pause & goto menu )
 if "%opcao%"=="4" ( pm2 restart foody-monitor & echo Monitor reiniciado. & pause & goto menu )
 if "%opcao%"=="5" ( pm2 logs foody-monitor & goto menu )
+if "%opcao%"=="7" ( echo. & echo  Baixando atualizacoes... & git pull & echo. & pm2 restart foody-monitor & echo. & echo  Atualizado e reiniciado! & pause & goto menu )
 if "%opcao%"=="6" (
     echo.
     echo  Seu IP na rede:
