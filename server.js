@@ -893,10 +893,11 @@ function processTracking(trackingList, ordersByCourierList) {
       } else if (!cs.stAlerted && now - cs.stSince >= STATIONARY_MS) {
         const sc = storeCoords();
         const atStore = sc && haversineM(clat, clng, sc.lat, sc.lng) < STORE_RADIUS_M;
-        if (!atStore) {
-          // LIVRE (sem pedido na mão) + parado longe da loja = demorando pra retornar → alerta próprio.
-          // COM pedido + parado = pode ser problema NA entrega → mantém o 'stationary'.
-          const livre = (cs.activeOrderCount || 0) === 0;
+        // LIVRE (sem pedido na mão) + parado longe da loja = demorando pra retornar → alerta próprio.
+        // COM pedido + parado = pode ser problema NA entrega → mantém o 'stationary'.
+        const livre = (cs.activeOrderCount || 0) === 0;
+        // No FIM do expediente ninguém precisa "retornar" — não nag quem está livre e parado.
+        if (!atStore && !(livre && isShiftEnding())) {
           const tipo = livre ? 'idlefree' : 'stationary';
           const texto = livre
             ? `${cs.name} está LIVRE e parado há 10min — demorando pra retornar`
@@ -989,20 +990,22 @@ function processTracking(trackingList, ordersByCourierList) {
     const gpsNull  = !!cs.noGps || stillFor >= 90000;
     const ctx = { lat: clat2, lng: clng2, gpsNull, hadOrder: held.length > 0, orders: held.map(h => h.num) };
 
+    // Foi embora no FIM do expediente, sem pedido na mão → não é sumiço a cobrar. Fica quieto.
+    const goingHome = held.length === 0 && isShiftEnding();
     if (held.length > 0) {
       const nums = held.map(h => `#${h.num}`).join(', ');
       appendLog({ type: 'status_change', courierName: cs.name, from: cs.status, to: 'dropped', ...ctx });
       // stageSince = última vez visto (quando caiu) → o card mostra o cronômetro "desconectado há X" ao vivo
       addAlert('dropped', `${cs.name} desconectou com ${held.length > 1 ? 'os pedidos' : 'o'} ${nums}`, cs.name, { ...coords, ...ctx, stageSince: cs.lastSeen });
-    } else {
+    } else if (!goingHome) {
       appendLog({ type: 'status_change', courierName: cs.name, from: cs.status, to: 'missing', ...ctx });
       addAlert('missing', `${cs.name} sumiu do mapa!`, cs.name, { ...coords, ...ctx, stageSince: cs.lastSeen });
+    } else {
+      // fim de expediente: só registra que foi embora (sem alerta 🚨 nem mensagem)
+      appendLog({ type: 'status_change', courierName: cs.name, from: cs.status, to: 'foi_embora', ...ctx });
     }
 
-    // Auto-mensagem pro entregador que sumiu — só se "missing" estiver ligada (padrão OFF).
-    // NÃO envia se for fim de expediente E ele sumiu SEM pedido na mão (foi embora, não é falta).
-    // Se sumiu segurando pedido (dropped), envia mesmo no fim — aí é problema real.
-    const goingHome = held.length === 0 && isShiftEnding();
+    // Auto-mensagem "App Desconectado" — só se ligada e NÃO for fim de expediente sem pedido.
     if (!goingHome) maybeAutoMessage('missing', cs.name);
     courierMap.delete(id);
   }
