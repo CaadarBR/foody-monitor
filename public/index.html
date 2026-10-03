@@ -578,6 +578,7 @@
     <button class="btn-icon" onclick="forceRefresh()" title="Atualizar agora">🔄</button>
     <button class="btn-icon" onclick="openLog()" title="Histórico do turno">📋</button>
     <button class="btn-icon" onclick="openPermanencia()" title="Pontos de Permanência">📍</button>
+    <button class="btn-icon" onclick="openQuemFez()" title="Quem fez um pedido">🔎</button>
     <button class="btn-icon" onclick="openSettings()" title="Configurações">⚙️</button>
   </div>
 </header>
@@ -725,6 +726,21 @@
     <div class="log-entries" id="permEntries">
       <div class="log-empty">Carregando...</div>
     </div>
+  </div>
+</div>
+
+<!-- ── Quem fez o pedido (só ADM) ── -->
+<div class="modal-overlay" id="pedidoModal">
+  <div class="modal" style="max-width:440px;">
+    <div class="log-modal-header">
+      <div class="modal-title" style="margin:0;">🔎 Quem fez o pedido?</div>
+      <button class="btn-icon" onclick="document.getElementById('pedidoModal').classList.remove('open')">✕</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px;">
+      <input type="text" id="pedidoBuscaNum" placeholder="Nº do pedido (ex: 69)" style="flex:1;padding:8px 10px;" onkeydown="if(event.key==='Enter')buscarQuemFez()">
+      <button class="btn-sm btn-primary" onclick="buscarQuemFez()">Buscar</button>
+    </div>
+    <div id="pedidoBuscaResult" style="margin-top:14px;font-size:15px;min-height:22px;"></div>
   </div>
 </div>
 
@@ -1182,6 +1198,26 @@ function closeLog() {
 
 async function reloadLog() {
   if (currentLogDate) await loadLog(currentLogDate);
+}
+
+// ── Quem fez o pedido (só ADM) ─────────────────────────────────────────────────
+function openQuemFez() {
+  document.getElementById('pedidoModal').classList.add('open');
+  document.getElementById('pedidoBuscaResult').innerHTML = '';
+  const inp = document.getElementById('pedidoBuscaNum');
+  inp.value = '';
+  setTimeout(() => inp.focus(), 50);
+}
+async function buscarQuemFez() {
+  const num = document.getElementById('pedidoBuscaNum').value.replace(/\D/g, '');
+  const out = document.getElementById('pedidoBuscaResult');
+  if (!num) { out.textContent = 'Digite o número do pedido.'; return; }
+  out.textContent = 'Buscando...';
+  try {
+    const d = await fetch('/api/quem-fez?pedido=' + num, { headers: adminPass ? { 'x-admin-password': adminPass } : {} }).then(r => r.json());
+    if (d.ok) out.innerHTML = `📦 Pedido <b>#${d.pedido}</b> → 🛵 <b>${d.entregador || '—'}</b> <span style="opacity:.6;">(${d.status || ''})</span>`;
+    else out.innerHTML = `❌ ${d.erro || 'não encontrado'}`;
+  } catch (e) { out.textContent = 'Erro na busca.'; }
 }
 
 // ── Pontos de Permanência ──────────────────────────────────────────────────────

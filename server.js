@@ -1919,6 +1919,25 @@ app.get('/api/permanencia', (req, res) => {
   res.json({ spots, couriers: [...couriersSet].sort(), dias: days, tipo });
 });
 
+// Quem fez / está com um pedido específico (SÓ ADM). Busca o número na lista de pedidos por
+// entregador do Foody (inclui os entregues do período).
+app.get('/api/quem-fez', async (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ ok: false, erro: 'só admin' });
+  const alvo = String(req.query.pedido || '').replace(/\D/g, '');
+  if (!alvo) return res.json({ ok: false, erro: 'informe o número do pedido' });
+  let data;
+  try { data = await foodyFetch('https://app.foodydelivery.com/api/order/listbycourier'); }
+  catch (e) { return res.status(502).json({ ok: false, erro: 'Foody indisponível' }); }
+  for (const co of (data.ordersByCourier || [])) {
+    for (const o of (co.orders || [])) {
+      if (String(orderNumberOf(o)) === alvo) {
+        return res.json({ ok: true, pedido: alvo, entregador: (co.courierName || '').trim(), status: o.status });
+      }
+    }
+  }
+  res.json({ ok: false, pedido: alvo, erro: 'não encontrado (talvez de outro dia/turno)' });
+});
+
 // Diagnóstico do armazenamento — por que o histórico não persiste?
 // Testa escrita real em logs/, lista os arquivos e mostra espaço em disco.
 app.get('/api/diag', (req, res) => {
