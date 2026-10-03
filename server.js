@@ -800,6 +800,11 @@ function processTracking(trackingList, ordersByCourierList) {
     }
 
     if (!courierMap.has(id)) {
+      // Reconectou (reapareceu no rastreamento) → congela o cronômetro de qualquer alerta
+      // de desconexão aberto dele, pra o número mostrar o tempo TOTAL que ficou fora.
+      for (const a of activeAlerts) {
+        if ((a.type === 'dropped' || a.type === 'missing') && a.courierName === name && a.stageSince && !a.resolvedAt) a.resolvedAt = now;
+      }
       const status = activeOrders.length > 0 ? 'delivering' : 'available';
       // Usa horário real de entrada do log (resiste a reinícios do servidor)
       const onlineAt = courierOnlineSince.get(name) || now;
@@ -950,10 +955,11 @@ function processTracking(trackingList, ordersByCourierList) {
     if (held.length > 0) {
       const nums = held.map(h => `#${h.num}`).join(', ');
       appendLog({ type: 'status_change', courierName: cs.name, from: cs.status, to: 'dropped', ...ctx });
-      addAlert('dropped', `${cs.name} desconectou com ${held.length > 1 ? 'os pedidos' : 'o'} ${nums}`, cs.name, { ...coords, ...ctx });
+      // stageSince = última vez visto (quando caiu) → o card mostra o cronômetro "desconectado há X" ao vivo
+      addAlert('dropped', `${cs.name} desconectou com ${held.length > 1 ? 'os pedidos' : 'o'} ${nums}`, cs.name, { ...coords, ...ctx, stageSince: cs.lastSeen });
     } else {
       appendLog({ type: 'status_change', courierName: cs.name, from: cs.status, to: 'missing', ...ctx });
-      addAlert('missing', `${cs.name} sumiu do mapa!`, cs.name, { ...coords, ...ctx });
+      addAlert('missing', `${cs.name} sumiu do mapa!`, cs.name, { ...coords, ...ctx, stageSince: cs.lastSeen });
     }
 
     // Auto-mensagem pro entregador que sumiu — só se "missing" estiver ligada (padrão OFF).
