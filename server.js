@@ -496,6 +496,7 @@ const readyOrderSince = new Map(); // uid do pedido pronto -> quando apareceu pr
 //  - status 'accepted'   (aceitou, não saiu)    por +5min
 const ACCEPT_DELAY_MS = 5 * 60 * 1000;
 const orderStageSince = new Map(); // uid -> { status, since, alerted, courier, num }
+const willlateAlertedOrders = new Set(); // uid dos pedidos que já receberam o aviso "vai atrasar" (1x por pedido)
 const orderHolder = new Map();      // uid -> { courier, num, ts } — quem estava com o pedido (pra detectar reatribuição)
 const REASSIGN_TTL = 45 * 60 * 1000;
 let lastUpdated      = null;
@@ -699,24 +700,26 @@ function trackOrderStages(ordersByCourierList) {
         }
       }
 
-      // PEDIDO VAI ATRASAR: recebeu o pedido, NÃO aceitou em notAcceptedMin, e o prazo de
-      // entrega está a <= slaLeftMin de estourar → manda msg REAL pro entregador (1x por pedido).
-      // Mesma trava de GPS: se já saiu da loja, não é esse caso. ATIVO por padrão.
+      // PEDIDO VAI ATRASAR: o prazo está a <= slaLeftMin de estourar E o entregador está DEMORANDO
+      // (há >= notAcceptedMin): ou recebeu e NÃO aceitou, ou aceitou e NÃO deu saída. Só enquanto
+      // ainda está na loja (trava de GPS — se já saiu, tá a caminho). Msg REAL 1x por PEDIDO.
       const wl = config.willLate || {};
-      if (wl.enabled !== false && o.status === 'dispatched' && !prev.willlateAlerted &&
-          now - prev.since >= (wl.notAcceptedMin ?? 5) * 60000 &&
-          !courierDepartedStore(courier)) {
+      const demorando = (o.status === 'dispatched' || o.status === 'accepted')
+        && now - prev.since >= (wl.notAcceptedMin ?? 5) * 60000
+        && !courierDepartedStore(courier);
+      if (wl.enabled !== false && demorando && !willlateAlertedOrders.has(key)) {
         const dueMs = orderDueMs(o);
         if (dueMs != null && (dueMs - now) <= (wl.slaLeftMin ?? 10) * 60000) {
-          prev.willlateAlerted = true;
+          willlateAlertedOrders.add(key);
           const faltam = Math.round((dueMs - now) / 60000);
           const quando = faltam >= 0 ? `faltam ~${faltam}min pro prazo` : `prazo já estourou há ${-faltam}min`;
-          addAlert('willlate', `${courier} não aceitou o #${prev.num} e ${quando} — VAI ATRASAR!`, courier, { stageSince: prev.since });
+          const oque = o.status === 'dispatched' ? 'não aceitou' : 'aceitou mas não saiu com';
+          addAlert('willlate', `${courier} ${oque} o #${prev.num} e ${quando} — VAI ATRASAR!`, courier, { stageSince: prev.since });
           const txt = (wl.text || '⚠️ {PEDIDO} está perto do prazo de entrega').replace(/{PEDIDO}/g, `#${prev.num}`);
           sendNudgeMessage(courier, txt)
             .then(() => appendLog({ type: 'auto_willlate', courierName: courier, num: prev.num }))
             .catch(e => console.error('[WILLLATE]', e.message));
-          console.log(`[WILLLATE] ${courier} #${prev.num} — ${quando}`);
+          console.log(`[WILLLATE] ${courier} #${prev.num} (${o.status}) — ${quando}`);
         }
       }
 
@@ -736,6 +739,7 @@ function trackOrderStages(ordersByCourierList) {
     if (!seen.has(k)) {
       resolveStageAlert(orderStageSince.get(k), now); // pedido saiu da lista → congela
       orderStageSince.delete(k);
+      willlateAlertedOrders.delete(k);
     }
   }
 }
