@@ -74,7 +74,7 @@ let config = {
   // "PEDIDO VAI ATRASAR": pedido mandado pro entregador que ele NÃO aceitou em notAcceptedMin
   // E o prazo de entrega (deliveryDueDate) está a <= slaLeftMin de estourar → manda msg REAL
   // automática pro entregador. ATIVO por padrão (pedido do John, 02/10). Tempos/texto editáveis.
-  willLate: { enabled: true, notAcceptedMin: 5, slaLeftMin: 10, text: '⚠️ {PEDIDO} está perto do prazo de entrega — por favor aceite e saia AGORA pra não atrasar! 🛵' },
+  willLate: { enabled: true, notAcceptedMin: 5, slaLeftMin: 10, text: '⚠️ {PEDIDO} está perto do prazo de entrega' },
   zones: [],            // cercas virtuais: [{ id, name, polygon: [[lat,lng],...] }]
 };
 
@@ -712,7 +712,7 @@ function trackOrderStages(ordersByCourierList) {
           const faltam = Math.round((dueMs - now) / 60000);
           const quando = faltam >= 0 ? `faltam ~${faltam}min pro prazo` : `prazo já estourou há ${-faltam}min`;
           addAlert('willlate', `${courier} não aceitou o #${prev.num} e ${quando} — VAI ATRASAR!`, courier, { stageSince: prev.since });
-          const txt = (wl.text || '⚠️ {PEDIDO} está perto do prazo — aceite e saia AGORA!').replace(/{PEDIDO}/g, `#${prev.num}`);
+          const txt = (wl.text || '⚠️ {PEDIDO} está perto do prazo de entrega').replace(/{PEDIDO}/g, `#${prev.num}`);
           sendNudgeMessage(courier, txt)
             .then(() => appendLog({ type: 'auto_willlate', courierName: courier, num: prev.num }))
             .catch(e => console.error('[WILLLATE]', e.message));
@@ -1774,7 +1774,7 @@ app.post('/api/admin/access', (req, res) => {
       enabled:        w.enabled !== false, // padrão ON — só desliga se mandar explicitamente false
       notAcceptedMin: num(w.notAcceptedMin, cur.notAcceptedMin || 5),
       slaLeftMin:     num(w.slaLeftMin, cur.slaLeftMin || 10),
-      text:           (typeof w.text === 'string' && w.text.trim()) ? w.text.trim().slice(0, 300) : (cur.text || '⚠️ {PEDIDO} está perto do prazo de entrega — por favor aceite e saia AGORA pra não atrasar! 🛵'),
+      text:           (typeof w.text === 'string' && w.text.trim()) ? w.text.trim().slice(0, 300) : (cur.text || '⚠️ {PEDIDO} está perto do prazo de entrega'),
     };
   }
   saveConfig();

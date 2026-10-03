@@ -869,6 +869,31 @@
       </div>
 
       <div class="form-group">
+        <label class="form-label">⏰ Pedido vai atrasar (avisa o entregador)</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin-bottom:8px;">
+          <input type="checkbox" id="willLateEnabled">
+          Avisar quando ele <b>não aceitou</b> o pedido e o <b>prazo está estourando</b>
+        </label>
+        <div style="display:flex;gap:10px;">
+          <div class="form-group" style="margin-bottom:0;flex:1;">
+            <label class="form-label">Não aceitou há (min)</label>
+            <input type="number" id="willLateNotAccepted" value="5" min="1" max="60">
+          </div>
+          <div class="form-group" style="margin-bottom:0;flex:1;">
+            <label class="form-label">Falta p/ o prazo (min)</label>
+            <input type="number" id="willLateSlaLeft" value="10" min="1" max="60">
+          </div>
+        </div>
+        <div class="form-group" style="margin-top:8px;margin-bottom:0;">
+          <label class="form-label">Mensagem (use {PEDIDO} pro nº do pedido)</label>
+          <textarea id="willLateText" rows="2" style="width:100%;">⚠️ {PEDIDO} está perto do prazo de entrega</textarea>
+        </div>
+        <div class="help-box" style="margin-top:8px;">
+          Manda a mensagem REAL pro entregador no chat do Foody, <b>1x por pedido</b>. Padrão: <b>ligado</b>.
+        </div>
+      </div>
+
+      <div class="form-group">
         <label class="form-label">📨 Mensagem de fim de expediente</label>
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin-bottom:8px;">
           <input type="checkbox" id="shiftEndMsgEnabled">
@@ -1589,6 +1614,11 @@ async function loadAdminExtras() {
     document.getElementById('shiftEndMsgEnabled').checked     = !!sem.enabled;
     document.getElementById('shiftEndMsgNotifyOwner').checked = sem.notifyOwner !== false;
     if (sem.text) document.getElementById('shiftEndMsgText').value = sem.text;
+    const wl = access.willLate || {};
+    document.getElementById('willLateEnabled').checked   = wl.enabled !== false;
+    document.getElementById('willLateNotAccepted').value = wl.notAcceptedMin || 5;
+    document.getElementById('willLateSlaLeft').value     = wl.slaLeftMin || 10;
+    if (wl.text) document.getElementById('willLateText').value = wl.text;
     // Guarda o que já estava LIGADO — pra confirmar só quando ativar algo novo.
     accessCache = {
       autoBlock:            !!ab.enabled,
@@ -1670,6 +1700,12 @@ async function saveSettings() {
     notifyOwner: document.getElementById('shiftEndMsgNotifyOwner').checked,
     text:        document.getElementById('shiftEndMsgText').value.trim(),
   };
+  const willLate = {
+    enabled:        document.getElementById('willLateEnabled').checked,
+    notAcceptedMin: Math.max(1, parseInt(document.getElementById('willLateNotAccepted').value) || 5),
+    slaLeftMin:     Math.max(1, parseInt(document.getElementById('willLateSlaLeft').value) || 10),
+    text:           document.getElementById('willLateText').value.trim(),
+  };
 
   // Confirma quando o ADM LIGA algo que manda ação real pro entregador (mensagem auto / block / despacho)
   const newAutoMsg = Object.entries(messages).some(([t, m]) => m.auto && !(autoMessagesCache[t] && autoMessagesCache[t].auto));
@@ -1701,7 +1737,7 @@ async function saveSettings() {
 
   await Promise.all([
     fetch('/config', { method: 'POST', headers, body: JSON.stringify(body) }),
-    fetch('/api/admin/access', { method: 'POST', headers, body: JSON.stringify({ allowedIps, pollIntervalMs, autoBlock, autoDispatch, autoShift, shiftEndMessage }) }),
+    fetch('/api/admin/access', { method: 'POST', headers, body: JSON.stringify({ allowedIps, pollIntervalMs, autoBlock, autoDispatch, autoShift, shiftEndMessage, willLate }) }),
     fetch('/api/admin/messages', { method: 'POST', headers, body: JSON.stringify({ messages, quick }) }),
   ]);
   quickMessagesList = quick.length ? quick : quickMessagesList;
@@ -1823,7 +1859,7 @@ const NUDGE_DEFAULTS = {
   accept:   'Favor aceitar o pedido',
   depart:   'Favor sair para entrega',
   idlefree: 'Favor retornar à loja para a próxima entrega',
-  willlate: 'Seu pedido está perto de atrasar — por favor, saia para a entrega o quanto antes!',
+  willlate: '⚠️ Seu pedido está perto do prazo de entrega',
 };
 
 // Hora do alerta: só a hora se for de hoje; senão "ontem HH:MM" ou "DD/MM HH:MM"
