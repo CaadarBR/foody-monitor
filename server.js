@@ -421,6 +421,35 @@ async function foodyFetch(url) {
   }
 }
 
+// ── Fonte da verdade dos pedidos: CardápioWeb (OXE MENU) ─────────────────────────
+// O monitor só enxerga o Foody; pedido ainda "em preparo" na cozinha nem chegou no
+// Foody. Pra saber se o expediente REALMENTE acabou, consulta o CardápioWeb.
+const CW_BASE = 'https://integracao.cardapioweb.com'; // CW_API_KEY/CW_PARTNER_KEY já declarados acima
+const CW_DONE = new Set(['delivered', 'closed', 'canceled', 'canceling']);
+let _cwPendenteCache = { ts: 0, val: null };
+// Há pedido pendente (recente, não finalizado) no CardápioWeb? Cache de 2min (não martela a API).
+// FAIL-SAFE: erro/indisponível → retorna TRUE (na dúvida, NÃO deixa desligar ninguém).
+async function temPedidoPendenteCW() {
+  if (_cwPendenteCache.val !== null && Date.now() - _cwPendenteCache.ts < 120000) return _cwPendenteCache.val;
+  const since = new Date(Date.now() - 3 * 3600 * 1000).toISOString(); // últimas 3h (ignora pedido velho travado)
+  try {
+    const r = await fetch(`${CW_BASE}/api/partner/v1/orders?updated_since=${encodeURIComponent(since)}`, {
+      headers: { 'X-API-KEY': CW_API_KEY, 'X-PARTNER-KEY': CW_PARTNER_KEY, 'accept': 'application/json' },
+    });
+    if (!r.ok) throw new Error('CW ' + r.status);
+    const data = await r.json();
+    const lista = Array.isArray(data) ? data : (data.orders || data.data || []);
+    const pend = lista.filter(o => !CW_DONE.has(String(o.status || o.order_status || '').toLowerCase())).length;
+    console.log(`[CW] pedidos pendentes (ult. 3h, nao finalizados): ${pend}`);
+    _cwPendenteCache = { ts: Date.now(), val: pend > 0 };
+    return pend > 0;
+  } catch (e) {
+    console.warn('[CW] consulta falhou -> fail-safe (assume pendente, nao desliga):', e.message);
+    _cwPendenteCache = { ts: Date.now(), val: true };
+    return true;
+  }
+}
+
 // Erro que indica sessão/cookie inválido de verdade (vs. instabilidade momentânea).
 function isAuthError(e) {
   return !!e && (e.status === 401 || e.status === 403 || (e.nonJson && e.status === 200));
@@ -1354,7 +1383,8 @@ async function doPoll() {
     // Encerrado: além do acima, ninguém mais com pedido ativo (todos já terminaram/saíram).
     const idleNow = shiftClosing && noActiveOrders;
     // Avisa "encerrado" só 1x por turno (não repete por restart nem por oscilação do quadro).
-    if (idleNow && shiftEndAlertedDate !== currentOpDate) {
+    // Só declara "expediente encerrado" se a FONTE (CardápioWeb) também estiver sem pedido pendente.
+    if (idleNow && shiftEndAlertedDate !== currentOpDate && !(await temPedidoPendenteCW())) {
       shiftEndAlertedDate = currentOpDate;
       // Push pro John só se ele deixou ligado (notifyOwner). O alerta na tela fica sempre.
       const semCfg = config.shiftEndMessage || {};
@@ -1371,7 +1401,14 @@ async function doPoll() {
     // o DIA SEGUINTE, ficando num loop que derrubava quem reconectava. Só parkear no fim REAL do
     // expediente (madrugada), nunca no pré-abertura. (fix 02/10/2026)
     if (idleNow && isLateNightBRT() && (config.autoShift || {}).enabled) {
-      autoShiftDisconnectAll().catch(e => console.error('[AUTO-SHIFT]', e.message));
+      // FONTE DA VERDADE: antes de desligar, confere o CardápioWeb (OXE MENU). Se ainda tem
+      // pedido pendente recente lá (em preparo/saiu p/ entrega) — que o Foody nem vê ainda —,
+      // NÃO desliga, pra nunca largar um pedido sem entregador. (fix 03/10/2026)
+      if (await temPedidoPendenteCW()) {
+        console.log('[AUTO-SHIFT] CardapioWeb ainda tem pedido pendente — expediente NAO acabou, nao desliga.');
+      } else {
+        autoShiftDisconnectAll().catch(e => console.error('[AUTO-SHIFT]', e.message));
+      }
     }
 
     lastUpdated = Date.now();
