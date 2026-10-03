@@ -82,7 +82,7 @@ let config = {
   // "PEDIDO VAI ATRASAR": pedido mandado pro entregador que ele NÃO aceitou em notAcceptedMin
   // E o prazo de entrega (deliveryDueDate) está a <= slaLeftMin de estourar → manda msg REAL
   // automática pro entregador. ATIVO por padrão (pedido do John, 02/10). Tempos/texto editáveis.
-  willLate: { enabled: true, notAcceptedMin: 5, slaLeftMin: 10, text: '⚠️ {PEDIDO} está perto do prazo de entrega' },
+  willLate: { enabled: true, notAcceptedMin: 5, slaLeftMin: 10, text: '⚠️ {PEDIDO} está perto do prazo de entrega — 10min para o pedido atrasar' },
   zones: [],            // cercas virtuais: [{ id, name, polygon: [[lat,lng],...] }]
 };
 
@@ -113,6 +113,12 @@ function loadConfig() {
   // Migra a config antiga (só "App Desconectado" pra quem some) pro novo formato de mensagens
   if (config.autoNudgeMissing && !(config.autoMessages && config.autoMessages.missing)) {
     config.autoMessages = { ...(config.autoMessages || {}), missing: { auto: true } };
+  }
+  // Troca o texto antigo do "vai atrasar" (longo/imperativo) pelo novo, 1x, sem mexer se o John já customizou.
+  const WILLLATE_OLD = '⚠️ {PEDIDO} está perto do prazo de entrega — por favor aceite e saia AGORA pra não atrasar! 🛵';
+  if (config.willLate && config.willLate.text === WILLLATE_OLD) {
+    config.willLate.text = '⚠️ {PEDIDO} está perto do prazo de entrega — 10min para o pedido atrasar';
+    saveConfig();
   }
 }
 

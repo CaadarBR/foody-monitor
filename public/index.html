@@ -809,6 +809,31 @@
       </div>
 
       <div class="form-group">
+        <label class="form-label">⏰ Pedido vai atrasar (avisa o entregador)</label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin-bottom:8px;">
+          <input type="checkbox" id="willLateEnabled">
+          Avisar quando ele <b>não aceitou</b> o pedido e o <b>prazo está estourando</b>
+        </label>
+        <div style="display:flex;gap:10px;">
+          <div class="form-group" style="margin-bottom:0;flex:1;">
+            <label class="form-label">Não aceitou há (min)</label>
+            <input type="number" id="willLateNotAccepted" value="5" min="1" max="60">
+          </div>
+          <div class="form-group" style="margin-bottom:0;flex:1;">
+            <label class="form-label">Falta p/ o prazo (min)</label>
+            <input type="number" id="willLateSlaLeft" value="10" min="1" max="60">
+          </div>
+        </div>
+        <div class="form-group" style="margin-top:8px;margin-bottom:0;">
+          <label class="form-label">Mensagem (edite à vontade — use {PEDIDO} pro nº do pedido)</label>
+          <textarea id="willLateText" rows="2" style="width:100%;">⚠️ {PEDIDO} está perto do prazo de entrega — 10min para o pedido atrasar</textarea>
+        </div>
+        <div class="help-box" style="margin-top:8px;">
+          Manda a mensagem REAL pro entregador no chat do Foody, <b>1x por pedido</b>. Padrão: <b>ligado</b>.
+        </div>
+      </div>
+
+      <div class="form-group">
         <label class="form-label">⚡ Botões rápidos (modal "alertar entregador")</label>
         <div class="help-box" style="margin-bottom:8px;">
           Atalhos que aparecem no modal quando você manda mensagem na mão. Edite o <b>rótulo</b> (o texto do botão)
@@ -881,31 +906,6 @@
           Ao fim do turno, desliga (offline forçado) quem estava conectado e <b>guarda a lista</b>.
           Ninguém fica disponível de novo antes do horário — quem reabrir o app é desligado de novo.
           No horário, religa <b>só quem estava na lista</b>. ⚠️ Ação real. Padrão: <b>desligado</b>.
-        </div>
-      </div>
-
-      <div class="form-group">
-        <label class="form-label">⏰ Pedido vai atrasar (avisa o entregador)</label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;margin-bottom:8px;">
-          <input type="checkbox" id="willLateEnabled">
-          Avisar quando ele <b>não aceitou</b> o pedido e o <b>prazo está estourando</b>
-        </label>
-        <div style="display:flex;gap:10px;">
-          <div class="form-group" style="margin-bottom:0;flex:1;">
-            <label class="form-label">Não aceitou há (min)</label>
-            <input type="number" id="willLateNotAccepted" value="5" min="1" max="60">
-          </div>
-          <div class="form-group" style="margin-bottom:0;flex:1;">
-            <label class="form-label">Falta p/ o prazo (min)</label>
-            <input type="number" id="willLateSlaLeft" value="10" min="1" max="60">
-          </div>
-        </div>
-        <div class="form-group" style="margin-top:8px;margin-bottom:0;">
-          <label class="form-label">Mensagem (use {PEDIDO} pro nº do pedido)</label>
-          <textarea id="willLateText" rows="2" style="width:100%;">⚠️ {PEDIDO} está perto do prazo de entrega</textarea>
-        </div>
-        <div class="help-box" style="margin-top:8px;">
-          Manda a mensagem REAL pro entregador no chat do Foody, <b>1x por pedido</b>. Padrão: <b>ligado</b>.
         </div>
       </div>
 
