@@ -1084,6 +1084,7 @@ function applyState(state) {
     if (upMin < 1)       upTxt = '⚠️ servidor reiniciou agora';
     else if (upMin < 60) upTxt = `servidor: ${upMin}min no ar`;
     else                 upTxt = `servidor: ${Math.floor(upMin / 60)}h${String(upMin % 60).padStart(2, '0')}min no ar`;
+    if (state.version) upTxt += ` · v ${state.version}`;
     document.getElementById('serverUptime').textContent = upTxt;
   }
 

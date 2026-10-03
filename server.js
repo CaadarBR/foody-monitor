@@ -9,6 +9,14 @@ process.on('uncaughtException',  err  => console.error('[ERRO]', err));
 process.on('unhandledRejection', reason => console.error('[PROMISE]', reason));
 
 const SERVER_STARTED_AT = Date.now();
+// Versão do código em execução (commit do git) — aparece no painel pra saber se o deploy pegou.
+let BUILD_VERSION = 'desconhecida';
+try {
+  const { execSync } = require('child_process');
+  const hash = execSync('git rev-parse --short HEAD', { cwd: __dirname }).toString().trim();
+  const data = execSync('git log -1 --format=%cd --date=format:%d/%m %H:%M', { cwd: __dirname }).toString().trim();
+  if (hash) BUILD_VERSION = `${hash}${data ? ' · ' + data : ''}`;
+} catch (e) { /* sem git disponível — fica 'desconhecida' */ }
 
 const app = express();
 app.set('trust proxy', true);
@@ -1475,6 +1483,7 @@ function buildStatePayload() {
     quickMessages:    quickMessages(), // botões rápidos do modal (editáveis pelo ADM)
     zonesCount:       (config.zones || []).length,
     serverStartedAt:  SERVER_STARTED_AT,
+    version:          BUILD_VERSION,
   };
 }
 
