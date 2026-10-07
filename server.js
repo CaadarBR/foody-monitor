@@ -650,11 +650,16 @@ function addAlert(type, msg, courierName = null, extra = {}, opts = {}) {
   return alert;
 }
 
-// Congela o cronômetro de um alerta de etapa quando o entregador finalmente aceita/sai.
+// Congela o(s) cronômetro(s) dos alertas de uma etapa quando ela termina (o entregador
+// aceitou/saiu, o pedido mudou de dono, saiu da lista, ou — via GPS — saiu da loja).
+// Congela tanto o alerta de "demora" (accept/depart) quanto o de "VAI ATRASAR" (willlate).
 function resolveStageAlert(prev, now) {
-  if (!prev || !prev.alerted || !prev.alertId) return;
-  const al = activeAlerts.find(a => a.id === prev.alertId);
-  if (al && !al.resolvedAt) al.resolvedAt = now;
+  if (!prev) return;
+  for (const id of [prev.alertId, prev.willlateAlertId]) {
+    if (!id) continue;
+    const al = activeAlerts.find(a => a.id === id);
+    if (al && !al.resolvedAt) al.resolvedAt = now;
+  }
 }
 
 function orderNumberOf(o) {
@@ -723,6 +728,13 @@ function trackOrderStages(ordersByCourierList) {
         orderStageSince.set(key, { status: o.status, since: now, alerted: false, alertId: null, courier, num: orderNumberOf(o) });
         continue;
       }
+      // JÁ SAIU da loja com o pedido (mesmo sem tocar "aceitar"/"sair" no app do Foody)?
+      // A etapa de "segurando" acabou de fato — o card já some (buildHolding), mas o alerta
+      // no histórico ficava com o cronômetro correndo em VERMELHO pra sempre. Congela aqui.
+      if ((o.status === 'dispatched' || o.status === 'accepted') && courierDepartedStore(courier)) {
+        resolveStageAlert(prev, now);
+      }
+
       if (!prev.alerted && now - prev.since >= ACCEPT_DELAY_MS) {
         if (o.status === 'dispatched') {
           // Só alarma "recebeu e não aceitou" se ele AINDA está na loja. Se o GPS
@@ -757,7 +769,8 @@ function trackOrderStages(ordersByCourierList) {
           const faltam = Math.round((dueMs - now) / 60000);
           const quando = faltam >= 0 ? `faltam ~${faltam}min pro prazo` : `prazo já estourou há ${-faltam}min`;
           const oque = o.status === 'dispatched' ? 'não aceitou' : 'aceitou mas não saiu com';
-          addAlert('willlate', `${courier} ${oque} o #${prev.num} e ${quando} — VAI ATRASAR!`, courier, { stageSince: prev.since });
+          const wlAlert = addAlert('willlate', `${courier} ${oque} o #${prev.num} e ${quando} — VAI ATRASAR!`, courier, { stageSince: prev.since });
+          prev.willlateAlertId = wlAlert.id;
           const txt = (wl.text || '⚠️ {PEDIDO} está perto do prazo de entrega').replace(/{PEDIDO}/g, `#${prev.num}`);
           sendNudgeMessage(courier, txt)
             .then(() => appendLog({ type: 'auto_willlate', courierName: courier, num: prev.num }))
