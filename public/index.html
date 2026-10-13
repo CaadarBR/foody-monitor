@@ -264,6 +264,11 @@
     }
     .badge-delivering { background: rgba(59,130,246,0.18);  color: #93c5fd; }
     .badge-available  { background: rgba(34,197,94,0.18);   color: #86efac; }
+    .queue-pos {
+      font-size: 10px; font-weight: 800; padding: 3px 7px; border-radius: 20px;
+      background: rgba(148,163,184,0.15); color: #cbd5e1;
+    }
+    .queue-pos.first  { background: #22c55e; color: #052e16; }
     .badge-warning    { background: rgba(245,158,11,0.18);  color: #fcd34d; }
     .badge-alert      { background: rgba(239,68,68,0.18);   color: #fca5a5; }
     .badge-missing    { background: rgba(239,68,68,0.10);   color: #f87171; }
@@ -1037,6 +1042,7 @@ let holding          = [];
 let alertMinutes     = 15;
 let autoNudgeMissing = false;
 let readyOrdersCount = 0;
+let courierQueue = []; // nomes na ordem da "Fila de Entregadores" do Foody
 let lastServerUpdate = null;
 let knownAlertIds    = new Set();
 let firstLoad        = true;
@@ -1126,6 +1132,7 @@ function applyState(state) {
   holding = state.holding || [];
   couriers.clear();
   for (const c of state.couriers) couriers.set(c.id, c);
+  courierQueue = Array.isArray(state.courierQueue) ? state.courierQueue : [];
 
   document.getElementById('refreshText').textContent = 'ao vivo';
   renderAlerts();
@@ -2049,9 +2056,32 @@ function updateHoldingTimers() {
 function renderCouriers() {
   const grid   = document.getElementById('couriersGrid');
   const now    = Date.now();
+  // Mesmo instante usado no cronômetro do card (disponível sem entrega → desde que ficou online)
+  const timerBaseOf = c => (c.status === 'available' && !c.finishedAt && c.onlineAt) ? c.onlineAt : c.statusSince;
+
+  // Posição na fila (só pra "Disponível"): segue a "Fila de Entregadores" do Foody.
+  // Sem a fila do Foody (ou ninguém casou), cai no fallback: quem está disponível há mais
+  // tempo é o 1º — que é como a fila do Foody anda (entrou antes, sai antes).
+  const norm = s => (s || '').trim().toLowerCase();
+  const qIdx = new Map(courierQueue.map((n, i) => [norm(n), i]));
+  const avail = [...couriers.values()].filter(c => c.status === 'available');
+  const useFoody = avail.some(c => qIdx.has(norm(c.name)));
+  const queuePos = new Map();
+  if (useFoody) {
+    avail.filter(c => qIdx.has(norm(c.name)))
+      .sort((a, b) => qIdx.get(norm(a.name)) - qIdx.get(norm(b.name)))
+      .forEach((c, i) => queuePos.set(c.id, i + 1));
+  } else {
+    avail.sort((a, b) => timerBaseOf(a) - timerBaseOf(b)).forEach((c, i) => queuePos.set(c.id, i + 1));
+  }
+
   const sorted = [...couriers.values()].sort((a, b) => {
     const order = { alert: 0, missing: 1, warning: 2, available: 3, delivering: 4 };
-    return (order[a.status] ?? 9) - (order[b.status] ?? 9);
+    const byStatus = (order[a.status] ?? 9) - (order[b.status] ?? 9);
+    if (byStatus || a.status !== 'available') return byStatus;
+    // Disponíveis: na ordem da fila; quem não está na fila do Foody vai pro fim (mais antigo antes)
+    const pa = queuePos.get(a.id) ?? Infinity, pb = queuePos.get(b.id) ?? Infinity;
+    return (pa - pb) || (timerBaseOf(a) - timerBaseOf(b));
   });
 
   if (sorted.length === 0) {
@@ -2074,10 +2104,8 @@ function renderCouriers() {
     const cfg = cfgMap[c.status];
 
     // Para disponível sem entrega prévia: conta desde que entrou online (não desde agora)
-    const timerBase = (c.status === 'available' && !c.finishedAt && c.onlineAt)
-      ? c.onlineAt
-      : c.statusSince;
-    const timerMs = now - timerBase;
+    const timerMs = now - timerBaseOf(c);
+    const pos = queuePos.get(c.id);
 
     const vehicle = c.vehicleType === 'motorcycle' ? '🏍️ Moto' : '🚗 Carro';
 
@@ -2100,7 +2128,10 @@ function renderCouriers() {
             <div class="courier-vehicle">${vehicle}${c.noGps ? ' · <span class="nogps">📵 sem GPS</span>' : ''}</div>
           </div>
           <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
-            <span class="badge ${cfg.badge}">${cfg.label}</span>
+            <div style="display:flex;align-items:center;gap:4px;">
+              ${pos ? `<span class="queue-pos${pos === 1 ? ' first' : ''}" title="Posição na fila de entregadores">${pos}º</span>` : ''}
+              <span class="badge ${cfg.badge}">${cfg.label}</span>
+            </div>
             ${c.lastOrderNumber ? `<span class="last-order">último #${c.lastOrderNumber}</span>` : ''}
           </div>
         </div>

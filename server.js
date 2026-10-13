@@ -522,6 +522,52 @@ async function toggleCourier(id) {
   return foodyPost(`https://app.foodydelivery.com/api/v2/courier/toggle/${id}`, {});
 }
 
+// ── Fila de entregadores do Foody ("Fila de Entregadores" do painel) ─────────
+// Usada SÓ pra ordenar os cards de "Disponível" na mesma ordem da fila do Foody.
+// Busca a cada 20s, fora do poll principal (não soma carga no ciclo de 1–10s → menos 429).
+// Formato do Foody não confirmado ainda (ver /api/fila-debug): parse tolerante. Se não der
+// pra ler, a fila fica vazia e o painel cai no fallback (quem está disponível há mais tempo).
+const QUEUE_REFRESH_MS = 20000;
+let courierQueue = [];      // [{ name, at }] na ordem da fila
+let queueFetchedAt = 0;
+let queueFetching = false;
+
+function parseCourierQueue(cc) {
+  let arr = cc && cc.couriersForDespatching;
+  if (arr && !Array.isArray(arr)) arr = arr.couriers || arr.queue || arr.items || Object.values(arr);
+  if (!Array.isArray(arr)) return [];
+  const out = arr.map((e, i) => {
+    if (!e || typeof e !== 'object') return null;
+    const name = e.courierName || e.name || (e.courier && (e.courier.name || e.courier.courierName)) || null;
+    if (!name) return null;
+    // "Entrou na fila em": pega o 1º campo que pareça data (nome varia; ex. queueDate/enteredAt)
+    let at = null;
+    for (const [k, v] of Object.entries(e)) {
+      if (!/date|time|since|queue|enter|entr/i.test(k) || v == null || typeof v === 'boolean') continue;
+      const t = typeof v === 'number' ? v : Date.parse(v);
+      if (Number.isFinite(t) && t > 1e12) { at = t; break; }
+    }
+    return { name: String(name).trim(), at, idx: i };
+  }).filter(Boolean);
+  // Com horário de entrada → ordena por ele; senão mantém a ordem que o Foody mandou.
+  if (out.length && out.every(q => q.at != null)) out.sort((a, b) => a.at - b.at || a.idx - b.idx);
+  return out.map(({ name, at }) => ({ name, at }));
+}
+
+async function refreshCourierQueue() {
+  if (queueFetching || Date.now() - queueFetchedAt < QUEUE_REFRESH_MS) return;
+  queueFetching = true;
+  queueFetchedAt = Date.now();
+  try {
+    const cc = await foodyFetch('https://app.foodydelivery.com/api/home-data/company-connections');
+    courierQueue = parseCourierQueue(cc);
+  } catch (e) {
+    console.error('[FILA]', e.message); // mantém a última fila boa
+  } finally {
+    queueFetching = false;
+  }
+}
+
 // ── Estado do monitor ─────────────────────────────────────────────────────────
 
 const courierMap = new Map();
@@ -1389,6 +1435,7 @@ async function doPoll() {
     applyAutoDispatch().catch(e => console.error('[AUTO-DISPATCH]', e.message));
     if (blockedCouriers.size) processBlockUnblocks().catch(e => console.error('[UNBLOCK]', e.message));
     processAutoShift().catch(e => console.error('[AUTO-SHIFT]', e.message));
+    refreshCourierQueue(); // não espera — só ordena os cards, nunca trava o poll
 
     await refreshMerchant();
     const storeOpen   = isStoreOpenNowBRT();
@@ -1530,6 +1577,7 @@ function buildStatePayload() {
     storeOpen: isStoreOpenNowBRT(),
     alertMinutes:     config.alertMinutes,
     couriers:         [...courierMap.values()],
+    courierQueue:     courierQueue.map(q => q.name), // ordem da "Fila de Entregadores" do Foody
     alerts:           activeAlerts,
     holding:          buildHolding(),
     autoNudgeMissing: !!(mergedAutoMessages().missing || {}).auto,
@@ -1721,6 +1769,7 @@ app.get('/api/fila-debug', async (req, res) => {
     res.json({
       company_connections_keys: Object.keys(cc || {}),
       couriersForDespatching: cc.couriersForDespatching || null,
+      fila_interpretada: parseCourierQueue(cc), // o que o monitor entendeu da fila (pra conferir)
       companyCourierConnectionStatus: cc.companyCourierConnectionStatus || null,
       companyConnections: cc.companyConnections || null,
       couriersForTracking_sample: (trk.couriers || [])[0] || null,
