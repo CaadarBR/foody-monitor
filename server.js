@@ -595,7 +595,9 @@ let hasLoggedStart   = false;
 let currentOpDate    = operationalDate();
 let shiftIdle         = false; // true quando não há mais pedido pronto/em rota e ninguém ativo (encerrado)
 let shiftClosing      = false; // true quando a loja fechou e não há mais nada pra distribuir (encerrando)
-let shiftEndAlertedDate = null; // opDate em que já disparei "Expediente encerrado" (1x por turno)
+let shiftEndAlertedDate = null; // opDate em que já disparei o ALERTA "Expediente encerrado" (1x por turno)
+let shiftEndMsgSentDate  = null; // opDate em que já MANDEI a msg pros entregadores (flag separada do alerta:
+                                 // assim, ligar o toggle DEPOIS do encerramento ainda dispara na volta seguinte)
 
 let lastCookieAlertAt = 0;
 let consecutiveFailures = 0;
@@ -612,6 +614,7 @@ function saveState() {
       shiftIdle,
       shiftClosing,
       shiftEndAlertedDate,
+      shiftEndMsgSentDate,
       savedAt:         Date.now(),
     }));
   } catch (e) { console.error('[WRITE-FAIL saveState]', STATE_FILE, e.message); }
@@ -630,6 +633,11 @@ function loadState() {
     shiftIdle        = !!raw.shiftIdle;    // não re-dispara "Expediente encerrado" a cada restart
     shiftClosing     = !!raw.shiftClosing;
     shiftEndAlertedDate = raw.shiftEndAlertedDate || null;
+    shiftEndMsgSentDate = raw.shiftEndMsgSentDate || null;
+    // Restart depois que o turno já encerrou (alerta já disparou hoje) NÃO deve re-mandar a msg
+    // pros entregadores do nada — seed a flag pra considerar o turno "já tratado". (evita blast ao
+    // subir deploy na madrugada). A rescue de "liguei o toggle depois" segue valendo sem restart.
+    if (!shiftEndMsgSentDate && shiftEndAlertedDate === operationalDate()) shiftEndMsgSentDate = shiftEndAlertedDate;
     // Limpa duplicatas de "Expediente encerrado" (bug antigo de restart) — mantém só a mais nova
     const shiftEnds = activeAlerts.filter(a => a.type === 'shiftEnd');
     if (shiftEnds.length > 1) {
@@ -1451,15 +1459,25 @@ async function doPoll() {
     shiftClosing = storeClosed && nothingToDispatch;
     // Encerrado: além do acima, ninguém mais com pedido ativo (todos já terminaram/saíram).
     const idleNow = shiftClosing && noActiveOrders;
-    // Avisa "encerrado" só 1x por turno (não repete por restart nem por oscilação do quadro).
+    // Duas coisas no fim de expediente, cada uma com seu disparo único por turno:
+    //  (1) ALERTA de tela + push pro John  → shiftEndAlertedDate
+    //  (2) MENSAGEM pros entregadores        → shiftEndMsgSentDate (só se o toggle estiver ligado)
+    // Flags SEPARADAS: se o toggle "Avisar entregadores" for ligado DEPOIS do encerramento, a msg
+    // ainda sai na próxima volta (antes elas dividiam a mesma flag e a msg era perdida pro turno).
     // Só declara "expediente encerrado" se a FONTE (CardápioWeb) também estiver sem pedido pendente.
-    if (idleNow && shiftEndAlertedDate !== currentOpDate && !(await temPedidoPendenteCW())) {
-      shiftEndAlertedDate = currentOpDate;
-      // Push pro John só se ele deixou ligado (notifyOwner). O alerta na tela fica sempre.
-      const semCfg = config.shiftEndMessage || {};
-      addAlert('shiftEnd', 'Expediente encerrado — sem pedidos pendentes.', null, {}, { push: semCfg.notifyOwner !== false });
-      // Mensagem de fim de expediente pros entregadores ativos (antes de qualquer desconexão do auto-shift).
-      sendShiftEndMessages();
+    const msgPending = (config.shiftEndMessage || {}).enabled && shiftEndMsgSentDate !== currentOpDate;
+    if (idleNow && (shiftEndAlertedDate !== currentOpDate || msgPending) && !(await temPedidoPendenteCW())) {
+      if (shiftEndAlertedDate !== currentOpDate) {
+        shiftEndAlertedDate = currentOpDate;
+        // Push pro John só se ele deixou ligado (notifyOwner). O alerta na tela fica sempre.
+        const semCfg = config.shiftEndMessage || {};
+        addAlert('shiftEnd', 'Expediente encerrado — sem pedidos pendentes.', null, {}, { push: semCfg.notifyOwner !== false });
+      }
+      // Mensagem de fim de expediente pros entregadores do turno (antes de qualquer desconexão do auto-shift).
+      if ((config.shiftEndMessage || {}).enabled && shiftEndMsgSentDate !== currentOpDate) {
+        shiftEndMsgSentDate = currentOpDate;
+        sendShiftEndMessages();
+      }
     }
     shiftIdle = idleNow;
 
