@@ -687,6 +687,7 @@
         <option value="missing">🚨 Sumiu do mapa</option>
         <option value="dropped">🚨 Desconectou com pedido</option>
         <option value="reassigned">🔁 Pedido reatribuído</option>
+        <option value="assigned">✋ Pedido posto na mão</option>
         <option value="stationary">⏸️ Parado no mesmo local</option>
         <option value="idlefree">🅿️ Livre e parado (demora pra voltar)</option>
         <option value="willlate">⏰ Pedido vai atrasar</option>
@@ -1120,6 +1121,8 @@ function applyState(state) {
             : alert.type === 'single' ? '✅ Saiu com 1 entrega'
             : alert.type === 'cookie' ? '🍪 Cookie expirado!'
             : alert.type === 'shiftEnd' ? '🌙 Expediente encerrado'
+            : alert.type === 'assigned' ? '✋ Pedido posto na mão'
+            : alert.type === 'reassigned' ? '🔁 Pedido reatribuído'
             : '⚠️ Demora no retorno',
           alert.msg
         );
@@ -1421,7 +1424,7 @@ function renderLog() {
         ? ` <a class="coord-link" href="https://www.google.com/maps?q=${e.lat},${e.lng}" target="_blank" rel="noopener" title="Abrir no Google Maps">${e.lat}, ${e.lng}</a>`
         : '';
       const nul = e.gpsNull ? ` <span class="gps-null">null</span>` : '';
-      const ico = e.alertType === 'missing' ? '🚨' : e.alertType === 'dropped' ? '🚨' : e.alertType === 'reassigned' ? '🔁' : e.alertType === 'stationary' ? '⏸️' : e.alertType === 'idlefree' ? '🅿️' : e.alertType === 'willlate' ? '⏰' : e.alertType === 'zone' ? '📍' : e.alertType === 'cookie' ? '🍪' : e.alertType === 'single' ? '✅' : e.alertType === 'block' ? '⛔' : e.alertType === 'unblock' ? '✅' : (e.alertType === 'accept' || e.alertType === 'depart') ? '⏳' : '⚠️';
+      const ico = e.alertType === 'missing' ? '🚨' : e.alertType === 'dropped' ? '🚨' : e.alertType === 'reassigned' ? '🔁' : e.alertType === 'assigned' ? '✋' : e.alertType === 'stationary' ? '⏸️' : e.alertType === 'idlefree' ? '🅿️' : e.alertType === 'willlate' ? '⏰' : e.alertType === 'zone' ? '📍' : e.alertType === 'cookie' ? '🍪' : e.alertType === 'single' ? '✅' : e.alertType === 'block' ? '⛔' : e.alertType === 'unblock' ? '✅' : (e.alertType === 'accept' || e.alertType === 'depart') ? '⏳' : '⚠️';
       return `
       <div class="log-entry ${e.alertType === 'single' || e.alertType === 'unblock' ? 'log-success' : 'log-danger'}">
         <span class="log-time">${time}</span><span>${ico}</span>

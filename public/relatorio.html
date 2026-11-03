@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Relatório de Comportamento — Monitor Foody</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #0b1220; color: #e5e9f0; padding: 16px; }
+  h1 { font-size: 18px; margin: 0 0 12px; color: #ff7a59; }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+  input, select, button { font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid #2a3550; background: #141c2e; color: #e5e9f0; }
+  button { cursor: pointer; background: #ff7a59; border-color: #ff7a59; color: #0b1220; font-weight: 600; }
+  button.ghost { background: #141c2e; color: #e5e9f0; }
+  #out { background: #0f1626; border: 1px solid #2a3550; border-radius: 10px; padding: 16px; overflow-x: auto; }
+  #out table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 13px; }
+  #out th, #out td { border: 1px solid #2a3550; padding: 6px 8px; text-align: left; white-space: nowrap; }
+  #out th { background: #182138; }
+  #out h2 { font-size: 16px; color: #ff7a59; }
+  #out h3 { font-size: 14px; margin-top: 18px; }
+  #out code { background: #182138; padding: 2px 6px; border-radius: 6px; }
+  .muted { color: #8893a7; font-size: 12px; }
+  #md { width: 100%; height: 220px; margin-top: 12px; background: #0f1626; color: #cfd6e4; border: 1px solid #2a3550; border-radius: 8px; padding: 10px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; display: none; }
+</style>
+</head>
+<body>
+  <h1>📊 Relatório de Comportamento — Entregadores</h1>
+  <div class="bar">
+    <input id="pass" type="password" placeholder="senha admin master" size="20">
+    <input id="date" type="date">
+    <select id="days">
+      <option value="1">só o dia</option>
+      <option value="7">últimos 7 dias</option>
+      <option value="15">últimos 15 dias</option>
+      <option value="30">últimos 30 dias</option>
+    </select>
+    <button id="go">Gerar</button>
+    <button id="copy" class="ghost">Copiar markdown</button>
+    <button id="dl" class="ghost">Baixar</button>
+  </div>
+  <div id="out"><span class="muted">Informe a senha e clique em Gerar.</span></div>
+  <textarea id="md" readonly></textarea>
+
+<script>
+  var $ = function (id) { return document.getElementById(id); };
+  // Pré-preenche a data com hoje (local).
+  (function () { var d = new Date(); $('date').value = d.toISOString().slice(0, 10); })();
+  // Lembra a senha na sessão (não persiste em disco).
+  try { $('pass').value = sessionStorage.getItem('adminPass') || ''; } catch (e) {}
+
+  var ultimoMd = '';
+
+  function mdToHtml(md) {
+    // Render mínimo: títulos, tabelas, code, negrito. Suficiente pro relatório.
+    var lines = md.split('\n'), html = [], i = 0;
+    function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+    function inline(s) { return esc(s).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`(.+?)`/g, '<code>$1</code>').replace(/\*(.+?)\*/g, '<i>$1</i>'); }
+    while (i < lines.length) {
+      var ln = lines[i];
+      if (/^\|/.test(ln) && i + 1 < lines.length && /^\|[-\s|]+\|/.test(lines[i + 1])) {
+        var head = ln.split('|').slice(1, -1).map(function (c) { return c.trim(); });
+        i += 2; var rows = [];
+        while (i < lines.length && /^\|/.test(lines[i])) { rows.push(lines[i].split('|').slice(1, -1).map(function (c) { return c.trim(); })); i++; }
+        var t = '<table><thead><tr>' + head.map(function (h) { return '<th>' + inline(h) + '</th>'; }).join('') + '</tr></thead><tbody>';
+        t += rows.map(function (r) { return '<tr>' + r.map(function (c) { return '<td>' + inline(c) + '</td>'; }).join('') + '</tr>'; }).join('');
+        t += '</tbody></table>'; html.push(t); continue;
+      }
+      if (/^### /.test(ln)) html.push('<h3>' + inline(ln.slice(4)) + '</h3>');
+      else if (/^## /.test(ln)) html.push('<h2>' + inline(ln.slice(3)) + '</h2>');
+      else if (ln.trim() === '') html.push('');
+      else html.push('<div>' + inline(ln) + '</div>');
+      i++;
+    }
+    return html.join('\n');
+  }
+
+  function gerar() {
+    var pass = $('pass').value.trim();
+    try { sessionStorage.setItem('adminPass', pass); } catch (e) {}
+    var date = $('date').value, days = $('days').value;
+    $('out').innerHTML = '<span class="muted">Gerando…</span>';
+    var url = '/api/relatorio?date=' + encodeURIComponent(date) + '&days=' + encodeURIComponent(days) + '&adminPassword=' + encodeURIComponent(pass);
+    fetch(url).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        if (!res.ok || !res.j.ok) { $('out').innerHTML = '<span class="muted">Erro: ' + ((res.j && res.j.erro) || 'acesso negado') + '</span>'; return; }
+        ultimoMd = res.j.markdown || '';
+        $('out').innerHTML = mdToHtml(ultimoMd);
+        $('md').value = ultimoMd; $('md').style.display = 'block';
+      })
+      .catch(function (e) { $('out').innerHTML = '<span class="muted">Falha: ' + e.message + '</span>'; });
+  }
+
+  $('go').onclick = gerar;
+  $('copy').onclick = function () { if (!ultimoMd) return; navigator.clipboard.writeText(ultimoMd).then(function () { $('copy').textContent = 'Copiado!'; setTimeout(function () { $('copy').textContent = 'Copiar markdown'; }, 1500); }); };
+  $('dl').onclick = function () {
+    if (!ultimoMd) return;
+    var blob = new Blob([ultimoMd], { type: 'text/markdown' });
+    var a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = 'relatorio-' + $('date').value + '.md'; a.click();
+  };
+</script>
+</body>
+</html>

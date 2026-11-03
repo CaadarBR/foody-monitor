@@ -337,11 +337,28 @@ function haversineM(lat1, lng1, lat2, lng2) {
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
+// Coordenada fixa da pizzaria (fallback). A API do CardápioWeb (merchant.address) é a fonte
+// preferida, mas se o servidor não conseguir buscá-la (timeout/bloqueio Cloudflare na VPS),
+// merchantCache fica null e a trava "na loja = não alerta" morria → alerta falso "demorando pra
+// retornar" com o cara parado na porta da loja. Com o fallback, o raio da loja funciona sempre.
+const STORE_FALLBACK = { lat: -9.534051095535943, lng: -35.779560861833104 };
 function storeCoords() {
   const a = merchantCache && merchantCache.address;
-  if (!a) return null;
-  const lat = parseFloat(a.latitude), lng = parseFloat(a.longitude);
-  return (isFinite(lat) && isFinite(lng)) ? { lat, lng } : null;
+  if (a) {
+    const lat = parseFloat(a.latitude), lng = parseFloat(a.longitude);
+    if (isFinite(lat) && isFinite(lng)) return { lat, lng };
+  }
+  return STORE_FALLBACK;
+}
+
+// Esse ponto está NA PIZZARIA? (dentro do raio da loja). Parado aqui é NORMAL — entregador
+// esperando o próximo pedido, não é "parada/gargalo". Usado pra NÃO alertar e pra LIMPAR os
+// pontos de permanência / relatórios da loja (inflava as estatísticas de "parado"). storeCoords()
+// nunca é null (tem fallback), então vale sempre.
+function isAtStore(lat, lng) {
+  if (typeof lat !== 'number' || typeof lng !== 'number') return false;
+  const sc = storeCoords();
+  return haversineM(lat, lng, sc.lat, sc.lng) < STORE_RADIUS_M;
 }
 
 // ── Cerca virtual (geofence) ───────────────────────────────────────────────────
@@ -588,6 +605,11 @@ const orderStageSince = new Map(); // uid -> { status, since, alerted, courier, 
 const willlateAlertedOrders = new Set(); // uid dos pedidos que já receberam o aviso "vai atrasar" (1x por pedido)
 const orderHolder = new Map();      // uid -> { courier, num, ts } — quem estava com o pedido (pra detectar reatribuição)
 const REASSIGN_TTL = 45 * 60 * 1000;
+// Atribuição de pedido → entregador (manual x automático). O Foody não traz flag "manual"; o único
+// candidato é o campo `despatchMode` de cada pedido, cujos valores nunca foram capturados.
+const assignmentSeen   = new Map(); // uid -> courierName (último entregador visto com o pedido)
+const despatchModeSeen = new Set(); // valores de despatchMode já dumpados (amostra 1x cada)
+let lastSnapshotAt = 0;              // última vez que gravei um snapshot da operação (gargalo)
 let lastUpdated      = null;
 let sessionOk        = false;
 let pollRunning      = false;
@@ -675,6 +697,7 @@ function addAlert(type, msg, courierName = null, extra = {}, opts = {}) {
   if (activeAlerts.length > 30) activeAlerts.pop();
   appendLog({ type: 'alert', alertType: type, msg, courierName,
     ...(extra.lat != null && extra.lng != null ? { lat: extra.lat, lng: extra.lng } : {}),
+    ...(extra.stageSince != null ? { stageSince: extra.stageSince } : {}),
     ...(extra.gpsNull ? { gpsNull: true } : {}) });
   console.log(`[ALERTA] ${msg}`);
   // opts.push === false → registra o alerta na tela mas NÃO manda notificação pro celular.
@@ -683,6 +706,7 @@ function addAlert(type, msg, courierName = null, extra = {}, opts = {}) {
     title: type === 'missing' ? '🚨 Sumiu do mapa!'
       : type === 'dropped'   ? '🚨 Desconectou com pedido'
       : type === 'reassigned'? '🔁 Pedido reatribuído'
+      : type === 'assigned'  ? '✋ Pedido posto na mão'
       : type === 'stationary'? '⏸️ Parado no mesmo local'
       : type === 'idlefree'  ? '🅿️ Livre e parado — demora pra retornar'
       : type === 'willlate'  ? '⏰ Pedido vai atrasar!'
@@ -874,6 +898,44 @@ function trackReassignments(ordersByCourierList, now) {
     }
   }
   for (const [uid, v] of orderHolder) if (now - v.ts > REASSIGN_TTL) orderHolder.delete(uid);
+}
+
+// Detecta o MOMENTO em que um pedido cai num entregador (atribuição). Diferente de
+// trackReassignments (que só vê TROCA de dono), aqui pega também a PRIMEIRA atribuição.
+// FASE 1 (aprender): loga cada atribuição com `despatchMode` + dump de amostra por valor novo,
+// pra descobrir qual valor = manual (sem precisar de HAR).
+// FASE 2 (alertar): se `config.manualAssignValue` estiver setado, dispara push só quando
+// despatchMode == esse valor (= atribuição na mão). Enquanto não setado, SÓ loga.
+function trackAssignments(ordersByCourierList, now) {
+  const manualVal = config.manualAssignValue || null;
+  for (const co of ordersByCourierList || []) {
+    const courier = (co.courierName || '').trim();
+    if (!courier) continue;
+    for (const o of co.orders || []) {
+      const uid = o.uid || o.id;
+      if (uid == null) continue;
+      const prev = assignmentSeen.get(uid);
+      const novo = prev == null;
+      const trocou = prev != null && prev !== courier;
+      if (novo || trocou) {
+        const dm = o.despatchMode != null ? o.despatchMode : null;
+        appendLog({ type: 'assignment', id: orderNumberOf(o), courierName: courier,
+          status: o.status || null, despatchMode: dm, trocou });
+        const dmKey = String(dm);
+        if (!despatchModeSeen.has(dmKey)) {
+          despatchModeSeen.add(dmKey);
+          appendLog({ type: 'assignment_sample', despatchMode: dm, order: o });
+        }
+        if (manualVal != null && dm === manualVal) {
+          addAlert('assigned', `✋ Pedido #${orderNumberOf(o)} posto na mão → ${courier}`, courier, { num: orderNumberOf(o), despatchMode: dm });
+        }
+      }
+      assignmentSeen.set(uid, courier);
+    }
+  }
+  if (assignmentSeen.size > 500) {
+    for (const uid of assignmentSeen.keys()) if (!orderHolder.has(uid)) assignmentSeen.delete(uid);
+  }
 }
 
 function processTracking(trackingList, ordersByCourierList) {
@@ -1079,7 +1141,11 @@ function processTracking(trackingList, ordersByCourierList) {
     }
 
     // Auto-mensagem "App Desconectado" — só se ligada e NÃO for fim de expediente sem pedido.
-    if (!goingHome) maybeAutoMessage('missing', cs.name);
+    // Auto-mensagem "App Desconectado" — só se ligada, NÃO for fim de expediente, e NÃO madrugada.
+    // Antes só suprimia quem saía SEM pedido (goingHome). Quem desconectava no fim do turno com um
+    // pedido "preso"/fantasma (held>0) era avisado "App Desconectado" de madrugada (caso 00:22).
+    const fimDeExpediente = isShiftEnding() || isLateNightBRT();
+    if (!goingHome && !fimDeExpediente) maybeAutoMessage('missing', cs.name);
     courierMap.delete(id);
   }
 }
@@ -1437,7 +1503,23 @@ async function doPoll() {
 
     trackOrderStages(orders.ordersByCourier || []);
     trackReassignments(orders.ordersByCourier || [], Date.now());
+    trackAssignments(orders.ordersByCourier || [], Date.now());
     processTracking(tracking.couriers, orders.ordersByCourier || []);
+
+    // Snapshot da operação (1x/min): série temporal pra detectar GARGALO no relatório —
+    // pedido esperando (ready) enquanto tem entregador livre. Usa números já calculados.
+    const nowSnap = Date.now();
+    if (nowSnap - lastSnapshotAt >= 60000) {
+      lastSnapshotAt = nowSnap;
+      const online = courierMap.size;
+      const busy   = busyCourierNames.size;
+      appendLog({ type: 'snapshot',
+        pending: (orders.pendingOrdersByCompany || []).length,
+        ready: readyOrdersCount,
+        online, busy, free: Math.max(0, online - busy),
+        couriers: [...courierMap.values()].map(c => ({ name: c.name, status: c.status, active: c.activeOrderCount || 0 })),
+      });
+    }
 
     // Motores de ação (só agem se ligados no ADM; senão retornam na hora):
     applyAutoDispatch().catch(e => console.error('[AUTO-DISPATCH]', e.message));
@@ -2005,6 +2087,10 @@ app.get('/api/permanencia', (req, res) => {
   const days = Math.min(Math.max(parseInt(req.query.days) || 30, 1), 365);
   const tipo = req.query.tipo || 'todos';
   const courier = (req.query.courier || '').trim().toLowerCase();
+  // Por padrão ESCONDE as paradas na pizzaria (parado na loja = esperando pedido, normal).
+  // Era o que inflava o topo da lista (centenas de "paradas" que eram só a porta da loja).
+  // ?incluirLoja=1 pra ver tudo, inclusive a loja.
+  const incluirLoja = req.query.incluirLoja === '1';
   let files;
   try {
     files = fs.readdirSync(LOGS_DIR).filter(f => /^\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort().reverse().slice(0, days);
@@ -2019,6 +2105,7 @@ app.get('/api/permanencia', (req, res) => {
     for (const e of logs) {
       if (e.type !== 'alert' || (e.alertType !== 'idlefree' && e.alertType !== 'stationary')) continue;
       if (typeof e.lat !== 'number' || typeof e.lng !== 'number') continue;
+      if (!incluirLoja && isAtStore(e.lat, e.lng)) continue; // parada na porta da loja = normal
       const nome = e.courierName || '—';
       couriersSet.add(nome);
       const livre = e.alertType === 'idlefree';
@@ -2043,6 +2130,166 @@ app.get('/api/permanencia', (req, res) => {
     primeiro: b.primeiro, ultimo: b.ultimo,
   })).sort((a, b) => b.count - a.count);
   res.json({ spots, couriers: [...couriersSet].sort(), dias: days, tipo });
+});
+
+// ── Relatório de comportamento (SÓ ADM MASTER) ─────────────────────────────────
+// Lê os logs diários já gravados e produz uma análise rigorosa: por entregador
+// (demora pra retornar, parado, demora pra aceitar/sair, vai atrasar, sumiços, nudges,
+// bloqueios, score) + gargalos da operação (pedido esperando com entregador livre).
+// IGNORA paradas na pizzaria (isAtStore) — parado na porta é normal, não é problema.
+function horaBRT(iso) { const d = new Date(iso); return (d.getUTCHours() + 24 - 3) % 24; }
+
+function analisarComportamento(dateArg, days) {
+  let files = [];
+  try {
+    const all = fs.readdirSync(LOGS_DIR).filter(f => /^\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort();
+    if (dateArg === 'all')      files = all;
+    else if (days && days > 1)  files = all.slice(-days);
+    else                        files = all.filter(f => f === `${dateArg}.json`);
+  } catch (e) {}
+
+  let eventos = [];
+  for (const f of files) {
+    try { eventos = eventos.concat(JSON.parse(fs.readFileSync(path.join(LOGS_DIR, f), 'utf8'))); } catch (e) {}
+  }
+  eventos.sort((a, b) => (a.timestamp || '').localeCompare(b.timestamp || ''));
+
+  const porEnt = new Map();
+  const getEnt = (n) => {
+    let x = porEnt.get(n);
+    if (!x) { x = { nome: n, idlefree: 0, stationary: 0, demoraAceitar: 0, demoraSair: 0, willlate: 0, sumico: 0, reassign: 0, nudges: 0, blocks: 0, idasEntrega: 0 }; porEnt.set(n, x); }
+    return x;
+  };
+  const totaisAlerta = {};
+  const porHora = {};
+  const serie = [];
+  let picoPendentes = 0, picoPendentesHora = null;
+
+  for (const e of eventos) {
+    const nome = (e.courierName || '').trim() || '—';
+    if (e.type === 'alert') {
+      const at = e.alertType;
+      const naLoja = (typeof e.lat === 'number' && typeof e.lng === 'number') ? isAtStore(e.lat, e.lng) : false;
+      if ((at === 'idlefree' || at === 'stationary') && naLoja) continue;
+      totaisAlerta[at] = (totaisAlerta[at] || 0) + 1;
+      if (['idlefree', 'stationary', 'accept', 'slow', 'depart', 'willlate', 'missing', 'dropped'].includes(at)) {
+        const h = horaBRT(e.timestamp); porHora[h] = (porHora[h] || 0) + 1;
+      }
+      const x = getEnt(nome);
+      if (at === 'idlefree') x.idlefree++;
+      else if (at === 'stationary') x.stationary++;
+      else if (at === 'accept' || at === 'slow') x.demoraAceitar++;
+      else if (at === 'depart') x.demoraSair++;
+      else if (at === 'willlate') x.willlate++;
+      else if (at === 'missing' || at === 'dropped') x.sumico++;
+      else if (at === 'reassigned') x.reassign++;
+    } else if (e.type === 'auto_nudge')   getEnt(nome).nudges++;
+    else if (e.type === 'auto_block')      getEnt(nome).blocks++;
+    else if (e.type === 'status_change' && e.to === 'delivering') getEnt(nome).idasEntrega++;
+    else if (e.type === 'snapshot' || e.type === 'auto_dispatch') {
+      const ready = e.ready != null ? e.ready : 0;
+      const free  = e.free != null ? e.free : (e.online != null && e.busy != null ? e.online - e.busy : null);
+      const pending = e.pending != null ? e.pending : null;
+      serie.push({ t: e.timestamp, ready, free, pending });
+      const p = pending != null ? pending : ready;
+      if (p > picoPendentes) { picoPendentes = p; picoPendentesHora = horaBRT(e.timestamp); }
+    }
+  }
+
+  for (const x of porEnt.values()) {
+    x.score = x.idlefree * 3 + x.stationary * 2 + x.demoraAceitar * 2 + x.demoraSair * 2 + x.willlate * 2 + x.sumico * 4 + x.blocks * 1;
+  }
+  const ranking = [...porEnt.values()].filter(x => x.nome !== '—').sort((a, b) => b.score - a.score);
+
+  const gargalos = [];
+  let win = null;
+  for (const s of serie) {
+    const gargalo = s.ready >= 1 && s.free != null && s.free >= 1;
+    const tms = new Date(s.t).getTime();
+    if (gargalo) {
+      if (win && tms - win.lastMs <= 3 * 60000) {
+        win.end = s.t; win.lastMs = tms; win.maxReady = Math.max(win.maxReady, s.ready);
+      } else {
+        if (win) gargalos.push(win);
+        win = { start: s.t, end: s.t, lastMs: tms, maxReady: s.ready };
+      }
+    }
+  }
+  if (win) gargalos.push(win);
+  for (const g of gargalos) {
+    const a = new Date(g.start).getTime(), b = new Date(g.end).getTime();
+    const paradosSet = new Set();
+    for (const e of eventos) {
+      if (e.type !== 'alert' || (e.alertType !== 'idlefree' && e.alertType !== 'stationary')) continue;
+      if (typeof e.lat === 'number' && typeof e.lng === 'number' && isAtStore(e.lat, e.lng)) continue;
+      const t = new Date(e.timestamp).getTime();
+      if (t >= a - 60000 && t <= b + 60000) paradosSet.add((e.courierName || '').trim() || '—');
+    }
+    g.parados = [...paradosSet];
+    g.durMin = Math.max(1, Math.round((b - a) / 60000));
+    g.inicioBRT = String(horaBRT(g.start)).padStart(2, '0') + ':' + String(new Date(g.start).getUTCMinutes()).padStart(2, '0');
+    g.fimBRT    = String(horaBRT(g.end)).padStart(2, '0') + ':' + String(new Date(g.end).getUTCMinutes()).padStart(2, '0');
+  }
+  gargalos.sort((a, b) => b.durMin - a.durMin);
+
+  const horaCritica = Object.entries(porHora).sort((a, b) => b[1] - a[1])[0] || null;
+  const periodo = files.length ? files[0].replace('.json', '') + (files.length > 1 ? ' → ' + files[files.length - 1].replace('.json', '') : '') : '(sem dados)';
+
+  const json = { periodo, dias: files.length, ranking, totaisAlerta, gargalos, picoPendentes, picoPendentesHora, horaCritica: horaCritica ? { hora: +horaCritica[0], alertas: horaCritica[1] } : null, temSerie: serie.length > 0 };
+
+  const L = [];
+  L.push('## 📊 Relatório de Comportamento — Entregadores · ' + periodo);
+  L.push('*Varanda\'s Pizzaria · Monitor Foody · acesso admin master*');
+  L.push('');
+  L.push('### 🚦 Gargalos (pedido esperando + entregador livre)');
+  if (!serie.length) {
+    L.push('_Sem série temporal nesse período (o snapshot de 1min começa a acumular a partir do deploy; dias antigos só têm gargalo se o auto-despacho estava ligado)._');
+  } else if (!gargalos.length) {
+    L.push('✅ Nenhum gargalo detectado — não houve pedido parado esperando com entregador livre.');
+  } else {
+    L.push('| Janela | Duração | Máx. pedidos presos | Quem estava parado |');
+    L.push('|---|---|---|---|');
+    for (const g of gargalos.slice(0, 15)) {
+      L.push('| ' + g.inicioBRT + '–' + g.fimBRT + ' | ' + g.durMin + ' min | ' + g.maxReady + ' | ' + (g.parados.join(', ') || '—') + ' |');
+    }
+  }
+  L.push('');
+  if (picoPendentes) L.push('**Pico de pedidos esperando:** ' + picoPendentes + (picoPendentesHora != null ? ' (~' + String(picoPendentesHora).padStart(2, '0') + 'h)' : ''));
+  if (horaCritica) L.push('**Horário mais crítico:** ' + String(horaCritica[0]).padStart(2, '0') + 'h (' + horaCritica[1] + ' alertas)');
+  L.push('');
+  L.push('### 👤 Por entregador');
+  if (!ranking.length) {
+    L.push('_Sem eventos de comportamento no período._');
+  } else {
+    L.push('| Entregador | Idas entrega | Demora retorno | Parado | Demora aceitar/sair | Vai atrasar | Sumiços | Nudges | Bloq. | Score |');
+    L.push('|---|---|---|---|---|---|---|---|---|---|');
+    for (const x of ranking) {
+      const flag = x.score >= 20 ? '🔴 ' : x.score >= 8 ? '🟡 ' : '🟢 ';
+      L.push('| ' + x.nome + ' | ' + x.idasEntrega + ' | ' + x.idlefree + ' | ' + x.stationary + ' | ' + (x.demoraAceitar + x.demoraSair) + ' | ' + x.willlate + ' | ' + x.sumico + ' | ' + x.nudges + ' | ' + x.blocks + ' | ' + flag + x.score + ' |');
+    }
+  }
+  L.push('');
+  L.push('### 📈 Totais do período');
+  const tt = Object.entries(totaisAlerta).map(([k, v]) => k + ' ' + v).join(' · ');
+  L.push('`' + (tt || 'sem alertas') + '`');
+  L.push('');
+  L.push('_Obs.: paradas na pizzaria (esperando pedido) não contam. "Idas entrega" = transições pra "em entrega" (aprox.)._');
+
+  json.markdown = L.join('\n');
+  return json;
+}
+
+app.get('/api/relatorio', (req, res) => {
+  if (!isAdmin(req)) return res.status(401).json({ ok: false, erro: 'só admin master' });
+  const date = req.query.date || operationalDate();
+  const days = req.query.days ? Math.min(Math.max(parseInt(req.query.days) || 1, 1), 365) : 1;
+  try {
+    const r = analisarComportamento(date, days);
+    res.json({ ok: true, ...r });
+  } catch (e) {
+    console.error('[RELATORIO]', e.message);
+    res.status(500).json({ ok: false, erro: e.message });
+  }
 });
 
 // Quem fez / está com um pedido específico (SÓ ADM). Busca o número na lista de pedidos por
