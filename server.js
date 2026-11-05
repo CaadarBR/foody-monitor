@@ -291,6 +291,26 @@ function isShiftEnding() {
 // Rate limit 5/min, então busco e faço cache (renova a cada 30min).
 const CW_API_KEY     = process.env.CW_API_KEY     || '9kyY4VvYq39YQ1u9QRK4rudY8wJNEWt5ckMfhQzg';
 const CW_PARTNER_KEY = process.env.CW_PARTNER_KEY || '12418';
+
+// ── Relay Cloudflare pro CardápioWeb ────────────────────────────────────────────
+// A VPS (IP de datacenter) é bloqueada pelo Cloudflare do cardapioweb.com → 403 em TODA
+// chamada ao integracao.cardapioweb.com (merchant/horário E pedidos pendentes). Isso quebrava
+// o fim de expediente: temPedidoPendenteCW() tomava 403 → fail-safe retornava "tem pedido" →
+// a msg de fim de expediente e o auto-shift nunca disparavam. Fix: rotear pelo relay (Worker
+// em IP limpo do Cloudflare). Ver skill /cloudflare-relay. Sem as envs, chama direto (fallback).
+const CW_RELAY_URL = (process.env.OXEMENU_RELAY_URL || 'https://relay-cardapioweb.lolsandlols.workers.dev').trim();
+const CW_RELAY_KEY = (process.env.OXEMENU_RELAY_KEY || 'd3fc764422dc993c4a4dd1abc6f445e1efcf9845f2eb3aa6').trim();
+const CW_HOST_RE   = /:\/\/[^/]*cardapioweb\.com(?::\d+)?(?:\/|$)/i;
+
+// fetch que, pra URLs do cardapioweb.com, sai pelo relay (burla o 403 do Cloudflare na VPS).
+function cwFetch(url, opts = {}) {
+  if (CW_RELAY_URL && CW_RELAY_KEY && CW_HOST_RE.test(url)) {
+    const headers = { ...(opts.headers || {}), 'X-Relay-Key': CW_RELAY_KEY, 'X-Relay-Target': url };
+    return fetch(CW_RELAY_URL, { ...opts, headers });
+  }
+  return fetch(url, opts);
+}
+
 let merchantCache = null;
 let merchantFetchedAt = 0;
 
@@ -299,7 +319,7 @@ async function refreshMerchant() {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 12000);
   try {
-    const r = await fetch('https://integracao.cardapioweb.com/api/partner/v1/merchant', {
+    const r = await cwFetch('https://integracao.cardapioweb.com/api/partner/v1/merchant', {
       headers: { 'X-API-KEY': CW_API_KEY, 'X-PARTNER-KEY': CW_PARTNER_KEY, 'Accept': 'application/json' },
       signal: controller.signal,
     });
@@ -456,7 +476,7 @@ async function temPedidoPendenteCW() {
   if (_cwPendenteCache.val !== null && Date.now() - _cwPendenteCache.ts < 120000) return _cwPendenteCache.val;
   const since = new Date(Date.now() - 3 * 3600 * 1000).toISOString(); // últimas 3h (ignora pedido velho travado)
   try {
-    const r = await fetch(`${CW_BASE}/api/partner/v1/orders?updated_since=${encodeURIComponent(since)}`, {
+    const r = await cwFetch(`${CW_BASE}/api/partner/v1/orders?updated_since=${encodeURIComponent(since)}`, {
       headers: { 'X-API-KEY': CW_API_KEY, 'X-PARTNER-KEY': CW_PARTNER_KEY, 'accept': 'application/json' },
     });
     if (!r.ok) throw new Error('CW ' + r.status);
