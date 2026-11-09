@@ -2383,8 +2383,37 @@ app.get('/api/quem-fez', async (req, res) => {
       }
     }
   }
-  res.json({ ok: false, pedido: alvo, erro: 'não encontrado (talvez de outro dia/turno)' });
+  // Fallback: o Foody só devolve em listbycourier os pedidos recentes/ativos — os mais
+  // antigos do turno somem de lá. Mas o monitor registra cada atribuição (e alertas) com
+  // o nº do pedido no log do dia. Procura lá e devolve o ÚLTIMO entregador visto com ele.
+  const hist = acharPedidoNoHistorico(alvo);
+  if (hist) return res.json({ ok: true, pedido: alvo, entregador: hist.entregador, status: 'do histórico' });
+  res.json({ ok: false, pedido: alvo, erro: 'não encontrado (nem ao vivo nem no histórico dos últimos dias)' });
 });
+
+// Procura um nº de pedido no HISTÓRICO (logs diários) — varre os últimos 3 dias operacionais
+// e devolve o ÚLTIMO entregador registrado com aquele pedido (cobre reatribuição). Casa pelo
+// id da atribuição, pelo campo num dos alertas, ou pelo "#NNN" no texto da mensagem.
+function acharPedidoNoHistorico(alvo) {
+  const base = new Date(operationalDate() + 'T12:00:00Z');
+  for (let i = 0; i < 3; i++) {
+    const date = base.toISOString().slice(0, 10);
+    base.setUTCDate(base.getUTCDate() - 1);
+    let logs;
+    try { logs = JSON.parse(fs.readFileSync(path.join(LOGS_DIR, `${date}.json`), 'utf8')); }
+    catch (e) { continue; }
+    let achado = null;
+    for (const e of logs) {
+      const bate =
+        (e.id  != null && String(e.id).replace(/\D/g, '')  === alvo) ||
+        (e.num != null && String(e.num).replace(/\D/g, '') === alvo) ||
+        (typeof e.msg === 'string' && new RegExp(`#${alvo}(\\D|$)`).test(e.msg));
+      if (bate && e.courierName) achado = { entregador: String(e.courierName).trim(), quando: e.timestamp, date };
+    }
+    if (achado) return achado;
+  }
+  return null;
+}
 
 // Diagnóstico do armazenamento — por que o histórico não persiste?
 // Testa escrita real em logs/, lista os arquivos e mostra espaço em disco.
