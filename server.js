@@ -79,10 +79,16 @@ let config = {
   //  - enabled     → manda no chat do Foody pra todos os entregadores ativos (padrão OFF).
   //  - notifyOwner → manda a notificação push pro celular do John (padrão ON).
   shiftEndMessage: { enabled: false, notifyOwner: true, text: 'Expediente encerrado. Obrigado pelo trabalho de hoje! 🌙' },
+  // Espelhar no WhatsApp do entregador (via API do app Entregas — número sai SEMPRE do cadastro
+  // de lá, que é a fonte atualizada). MASTER off por padrão; além dele, cada tipo tem seu próprio
+  // flag `whatsapp` (em autoMessages[tipo].whatsapp e willLate.whatsapp), também off por padrão.
+  // Só manda no zap quando whatsappNotify.enabled E o flag do tipo estão ligados.
+  whatsappNotify: { enabled: false },
   // "PEDIDO VAI ATRASAR": pedido mandado pro entregador que ele NÃO aceitou em notAcceptedMin
   // E o prazo de entrega (deliveryDueDate) está a <= slaLeftMin de estourar → manda msg REAL
   // automática pro entregador. ATIVO por padrão (pedido do John, 02/10). Tempos/texto editáveis.
-  willLate: { enabled: true, notAcceptedMin: 5, slaLeftMin: 10, text: '⚠️ {PEDIDO} está perto do prazo de entrega — 10min para o pedido atrasar' },
+  // whatsapp: espelha esse aviso também no zap do entregador (off por padrão).
+  willLate: { enabled: true, whatsapp: false, notAcceptedMin: 5, slaLeftMin: 10, text: '⚠️ {PEDIDO} está perto do prazo de entrega — 10min para o pedido atrasar' },
   zones: [],            // cercas virtuais: [{ id, name, polygon: [[lat,lng],...] }]
 };
 
@@ -106,6 +112,7 @@ function loadConfig() {
       if (saved.autoDispatch && typeof saved.autoDispatch === 'object') config.autoDispatch = { ...config.autoDispatch, ...saved.autoDispatch };
       if (saved.autoShift && typeof saved.autoShift === 'object') config.autoShift = { ...config.autoShift, ...saved.autoShift };
       if (saved.shiftEndMessage && typeof saved.shiftEndMessage === 'object') config.shiftEndMessage = { ...config.shiftEndMessage, ...saved.shiftEndMessage };
+      if (saved.whatsappNotify && typeof saved.whatsappNotify === 'object') config.whatsappNotify = { ...config.whatsappNotify, ...saved.whatsappNotify };
       if (saved.willLate && typeof saved.willLate === 'object') config.willLate = { ...config.willLate, ...saved.willLate };
       if (Array.isArray(saved.zones)) config.zones = saved.zones;
     } catch (e) {}
@@ -132,7 +139,8 @@ function mergedAutoMessages() {
       label: def.label,
       icon:  def.icon,
       text:  (typeof s.text === 'string' && s.text.trim()) ? s.text : def.text,
-      auto:  !!s.auto,
+      auto:  !!s.auto,       // manda no chat do Foody
+      whatsapp: !!s.whatsapp, // espelha no WhatsApp do entregador (via app Entregas)
     };
   }
   return out;
@@ -144,16 +152,56 @@ function autoMsg(type) {
   return (m && m.auto && m.text) ? m.text : null;
 }
 
-// Dispara a mensagem automática (se ligada) pro entregador no chat do Foody. Loga o envio.
+// Dispara a mensagem automática pro entregador. Dois canais INDEPENDENTES, cada um com seu flag:
+//   - auto     → chat do Foody (sendNudgeMessage)
+//   - whatsapp → WhatsApp do entregador (via app Entregas; só se o MASTER também estiver ligado)
 function maybeAutoMessage(type, courierName) {
-  const text = autoMsg(type);
-  if (!text || !courierName) return;
-  sendNudgeMessage(courierName, text)
-    .then(r => {
-      appendLog({ type: 'auto_nudge', courierName: r.courierName, msg: text, alertType: type });
-      console.log(`[AUTO-MSG:${type}] → ${r.courierName}: ${text}`);
+  if (!courierName) return;
+  const m = mergedAutoMessages()[type];
+  if (!m || !m.text) return;
+  if (m.auto) {
+    sendNudgeMessage(courierName, m.text)
+      .then(r => {
+        appendLog({ type: 'auto_nudge', courierName: r.courierName, msg: m.text, alertType: type });
+        console.log(`[AUTO-MSG:${type}] → ${r.courierName}: ${m.text}`);
+      })
+      .catch(e => console.error(`[AUTO-MSG:${type}]`, e.message));
+  }
+  if (m.whatsapp) notifyCourierWhatsApp(courierName, m.text, type);
+}
+
+// ── Espelho no WhatsApp do entregador ──────────────────────────────────────────
+// Não falamos WAHA direto: chamamos a API do app Entregas, que resolve o número pelo
+// CADASTRO (fonte única, sempre atualizada) e manda com a lógica dele (9º dígito etc.).
+// Gate duplo: whatsappNotify.enabled (master) + o flag do tipo. Dedup por nome+tipo+texto
+// (5 min) pra não martelar o mesmo entregador (defesa contra bloqueio do WhatsApp).
+const ENTREGAS_URL = (process.env.ENTREGAS_URL || 'https://entregas.varandaspizzaria.com').replace(/\/+$/, '');
+const ENTREGAS_TOKEN = process.env.ENTREGAS_TOKEN || '';
+const _waDedup = new Map(); // key -> ts
+const WA_DEDUP_MS = 5 * 60 * 1000;
+
+function notifyCourierWhatsApp(courierName, text, kind) {
+  if (!(config.whatsappNotify || {}).enabled) return;         // master off
+  if (!courierName || !text) return;
+  if (!ENTREGAS_TOKEN) { console.warn('[WA-MIRROR] ENTREGAS_TOKEN não configurado — pulando'); return; }
+  const key = `${courierName}|${kind}|${text}`;
+  const now = Date.now();
+  const last = _waDedup.get(key);
+  if (last && now - last < WA_DEDUP_MS) return;               // já mandou isso há pouco
+  _waDedup.set(key, now);
+  if (_waDedup.size > 500) { for (const [k, ts] of _waDedup) if (now - ts > WA_DEDUP_MS) _waDedup.delete(k); }
+
+  fetch(`${ENTREGAS_URL}/api/entregadores/notificar`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-cron-secret': ENTREGAS_TOKEN },
+    body: JSON.stringify({ nome: courierName, texto: text }),
+  })
+    .then(r => r.json().catch(() => ({})))
+    .then(j => {
+      appendLog({ type: 'wa_mirror', courierName, msg: text, alertType: kind, enviado: !!j.enviado, motivo: j.motivo || null });
+      console.log(`[WA-MIRROR:${kind}] ${courierName} → ${j.enviado ? 'enviado' : 'NÃO (' + (j.motivo || j.erro || '?') + ')'}`);
     })
-    .catch(e => console.error(`[AUTO-MSG:${type}]`, e.message));
+    .catch(e => console.error(`[WA-MIRROR:${kind}]`, e.message));
 }
 
 function ensureVapidKeys() {
@@ -873,6 +921,7 @@ function trackOrderStages(ordersByCourierList) {
           sendNudgeMessage(courier, txt)
             .then(() => appendLog({ type: 'auto_willlate', courierName: courier, num: prev.num }))
             .catch(e => console.error('[WILLLATE]', e.message));
+          if (wl.whatsapp) notifyCourierWhatsApp(courier, txt, 'willlate');
           console.log(`[WILLLATE] ${courier} #${prev.num} (${o.status}) — ${quando}`);
         }
       }
@@ -1830,6 +1879,7 @@ app.post('/api/admin/messages', (req, res) => {
       next[type] = {
         text: (typeof m.text === 'string') ? m.text.trim().slice(0, 300) : '',
         auto: !!m.auto,
+        whatsapp: !!m.whatsapp,
       };
     }
     config.autoMessages = next;
@@ -1959,7 +2009,8 @@ app.get('/api/admin/access', (req, res) => {
     autoDispatch:   config.autoDispatch || { enabled: false, max: 4 },
     autoShift:      config.autoShift || { enabled: false, reactivateAt: '17:00' },
     shiftEndMessage: config.shiftEndMessage || { enabled: false, notifyOwner: true, text: '' },
-    willLate:       config.willLate || { enabled: true, notAcceptedMin: 5, slaLeftMin: 10, text: '' },
+    whatsappNotify: config.whatsappNotify || { enabled: false },
+    willLate:       config.willLate || { enabled: true, whatsapp: false, notAcceptedMin: 5, slaLeftMin: 10, text: '' },
     autoShiftPending: {
       phase:        autoShiftState.phase,
       count:        (autoShiftState.list || []).length,
@@ -2013,12 +2064,16 @@ app.post('/api/admin/access', (req, res) => {
       text:        (typeof s.text === 'string' && s.text.trim()) ? s.text.trim().slice(0, 300) : (config.shiftEndMessage?.text || 'Expediente encerrado. Obrigado pelo trabalho de hoje! 🌙'),
     };
   }
+  if (req.body.whatsappNotify && typeof req.body.whatsappNotify === 'object') {
+    config.whatsappNotify = { enabled: !!req.body.whatsappNotify.enabled };
+  }
   if (req.body.willLate && typeof req.body.willLate === 'object') {
     const w = req.body.willLate;
     const cur = config.willLate || {};
     const num = (v, def) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : def; };
     config.willLate = {
       enabled:        w.enabled !== false, // padrão ON — só desliga se mandar explicitamente false
+      whatsapp:       !!w.whatsapp,        // espelha no zap (padrão OFF)
       notAcceptedMin: num(w.notAcceptedMin, cur.notAcceptedMin || 5),
       slaLeftMin:     num(w.slaLeftMin, cur.slaLeftMin || 10),
       text:           (typeof w.text === 'string' && w.text.trim()) ? w.text.trim().slice(0, 300) : (cur.text || '⚠️ {PEDIDO} está perto do prazo de entrega'),

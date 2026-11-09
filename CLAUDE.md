@@ -29,6 +29,12 @@ Existem DOIS sistemas que falam com o **mesmo Foody** (mesma conta/sessão) e **
   Depende de: coords do destino + `deliveryDueDate` (já confirmado que existe) + ordem/rota.
 
 # Infra / deploy
-Git `main`. O deploy é por webhook do Easypanel (ver skill `/easypanel`). Working tree pode ficar
-ATRASADO em relação ao origin — sempre `git fetch` + conferir antes de editar (em 02/10 o local
-estava 12 commits atrás e a feature nem existia no server.js local).
+Roda no **Easypanel** (VPS 72.60.52.8), serviço `foody-monitor` no projeto `varandas_pizzaria`,
+host `monitor.varandaspizzaria.com`. **AUTO-DEPLOY: um `git push origin main` dispara build+deploy
+sozinho** (integração GitHub→Easypanel ligada neste serviço — confirmado 03/11/2026 pushando e
+vendo as rotas novas subirem sem webhook). NÃO precisa de webhook nem de PM2/`.bat` (os scripts PM2
+no repo são legado de quando rodava em casa). Build leva ~2-5min; confere subindo batendo numa rota
+nova (ex.: `curl https://monitor.varandaspizzaria.com/api/relatorio` → 401 = subiu).
+⚠️ Working tree LOCAL costuma ficar ATRASADO em relação ao origin — **sempre `git fetch` + conferir
+ahead/behind ANTES de editar** (03/11 o local estava 5 commits atrás; em 02/10, 12 atrás). Edite
+sempre sobre `origin/main`, nunca sobre o local velho, senão o push reverte produção.
