@@ -397,6 +397,7 @@ function isStoreOpenNowBRT() {
 const STATIONARY_MS    = 10 * 60 * 1000; // parado por +10min
 const MOVE_THRESHOLD_M = 80;             // moveu se saiu >80m do ponto (tolera jitter de GPS)
 const STORE_RADIUS_M   = 150;            // dentro disso = na loja → parado ali é normal, não alerta
+const RETURN_RADIUS_M  = 2000;           // "voltou" = entrou nesse raio da loja (tempo de retorno, pedido do John 15/11)
 
 function haversineM(lat1, lng1, lat2, lng2) {
   const R = 6371000, toRad = d => d * Math.PI / 180;
@@ -670,6 +671,10 @@ const readyOrderSince = new Map(); // uid do pedido pronto -> quando apareceu pr
 //  - status 'accepted'   (aceitou, não saiu)    por +5min
 const ACCEPT_DELAY_MS = 5 * 60 * 1000;
 const orderStageSince = new Map(); // uid -> { status, since, alerted, courier, num }
+// Marcos de tempo de CADA pedido, pra medir SEMPRE (não só quando estoura o limite) os tempos que
+// o John quer no relatório: "tempo pra aceite" (dispatched→accepted) e "tempo aceite→saída"
+// (accepted→saiu da loja). Gravados em order_timing nos logs do dia. (feature 15/11/2026)
+const orderMarks = new Map(); // uid -> { courier, num, dispatchedAt, acceptedAt, acceptLogged, departLogged }
 const willlateAlertedOrders = new Set(); // uid dos pedidos que já receberam o aviso "vai atrasar" (1x por pedido)
 const orderHolder = new Map();      // uid -> { courier, num, ts } — quem estava com o pedido (pra detectar reatribuição)
 const REASSIGN_TTL = 45 * 60 * 1000;
@@ -843,6 +848,33 @@ function courierDepartedStore(name) {
   return false;
 }
 
+// Mede SEMPRE (todo pedido, não só quando estoura o limite) os tempos que o John quer no relatório:
+//   accept → tempo pra aceite   = dispatched → accepted
+//   depart → tempo aceite→saída = accepted → saiu da loja (status onGoing OU GPS fora do raio)
+// Grava em order_timing nos logs do dia; idempotente (1x cada marco por pedido). Se o pedido troca
+// de dono, reinicia o ciclo. (feature 15/11/2026)
+function recordOrderTiming(key, status, courier, num, now, departed) {
+  let mk = orderMarks.get(key);
+  if (!mk || mk.courier !== courier) {
+    mk = { courier, num, dispatchedAt: null, acceptedAt: null, acceptLogged: false, departLogged: false };
+    orderMarks.set(key, mk);
+  }
+  if (num != null) mk.num = num;
+  if (status === 'dispatched' && mk.dispatchedAt == null) mk.dispatchedAt = now;
+  if (status === 'accepted') {
+    if (mk.acceptedAt == null) mk.acceptedAt = now;
+    if (!mk.acceptLogged && mk.dispatchedAt != null) {
+      appendLog({ type: 'order_timing', metric: 'accept', courierName: courier, num: mk.num, secs: Math.round((now - mk.dispatchedAt) / 1000) });
+      mk.acceptLogged = true;
+    }
+  }
+  const saiu = status === 'onGoing' || ((status === 'accepted' || status === 'dispatched') && departed);
+  if (saiu && !mk.departLogged && mk.acceptedAt != null) {
+    appendLog({ type: 'order_timing', metric: 'depart', courierName: courier, num: mk.num, secs: Math.round((now - mk.acceptedAt) / 1000) });
+    mk.departLogged = true;
+  }
+}
+
 // Vigia quanto tempo cada pedido fica "recebido mas não aceito" (dispatched) e
 // "aceito mas não saiu" (accepted). Passou de ACCEPT_DELAY_MS, alerta uma vez.
 function trackOrderStages(ordersByCourierList) {
@@ -860,6 +892,7 @@ function trackOrderStages(ordersByCourierList) {
       const key = o.uid || o.id;
       if (key == null) continue;
       seen.add(key);
+      recordOrderTiming(key, o.status, courier, orderNumberOf(o), now, courierDepartedStore(courier));
       const prev = orderStageSince.get(key);
       if (!prev || prev.status !== o.status) {
         resolveStageAlert(prev, now); // etapa anterior terminou → congela o cronômetro
@@ -942,6 +975,7 @@ function trackOrderStages(ordersByCourierList) {
     if (!seen.has(k)) {
       resolveStageAlert(orderStageSince.get(k), now); // pedido saiu da lista → congela
       orderStageSince.delete(k);
+      orderMarks.delete(k);
       willlateAlertedOrders.delete(k);
     }
   }
@@ -1164,6 +1198,21 @@ function processTracking(trackingList, ordersByCourierList) {
         } else {
           if (cs.status === 'alert' || cs.status === 'warning') cs.alerted = false;
           cs.status = 'available';
+        }
+      }
+    }
+
+    // Tempo de retorno: do fim da ÚLTIMA entrega (ficou livre) até entrar no raio de 2km da loja.
+    // (pedido do John 15/11 — grava return_timing nos logs do dia, pro relatório.)
+    if (activeOrders.length > 0) {
+      cs.returnFrom = null; cs.returnLogged = false;   // pegou pedido / foi entregar → zera o ciclo
+    } else if (cs.finishedAt) {
+      if (cs.returnFrom == null && !cs.returnLogged) cs.returnFrom = cs.finishedAt;
+      if (cs.returnFrom != null && !cs.returnLogged && typeof cs.lat === 'number' && typeof cs.lng === 'number') {
+        const scr = storeCoords();
+        if (scr && haversineM(cs.lat, cs.lng, scr.lat, scr.lng) <= RETURN_RADIUS_M) {
+          appendLog({ type: 'return_timing', courierName: cs.name, num: cs.lastOrderNumber, secs: Math.round((now - cs.returnFrom) / 1000) });
+          cs.returnLogged = true;
         }
       }
     }
@@ -2213,8 +2262,16 @@ app.get('/api/permanencia', (req, res) => {
 // bloqueios, score) + gargalos da operação (pedido esperando com entregador livre).
 // IGNORA paradas na pizzaria (isAtStore) — parado na porta é normal, não é problema.
 function horaBRT(iso) { const d = new Date(iso); return (d.getUTCHours() + 24 - 3) % 24; }
+// Formata segundos como m:ss (ou "–" se não houver amostra). Usado nos tempos do relatório.
+function fmtSecs(s) {
+  if (s == null || !isFinite(s)) return '–';
+  const m = Math.floor(s / 60), r = Math.round(s % 60);
+  return m + ':' + String(r).padStart(2, '0');
+}
+function avgSecs(arr) { return (arr && arr.length) ? arr.reduce((a, b) => a + b, 0) / arr.length : null; }
+function maxSecs(arr) { return (arr && arr.length) ? Math.max(...arr) : null; }
 
-function analisarComportamento(dateArg, days) {
+function analisarComportamento(dateArg, days, courierFilter) {
   let files = [];
   try {
     const all = fs.readdirSync(LOGS_DIR).filter(f => /^\d{4}-\d{2}-\d{2}\.json$/.test(f)).sort();
@@ -2232,7 +2289,7 @@ function analisarComportamento(dateArg, days) {
   const porEnt = new Map();
   const getEnt = (n) => {
     let x = porEnt.get(n);
-    if (!x) { x = { nome: n, idlefree: 0, stationary: 0, demoraAceitar: 0, demoraSair: 0, willlate: 0, sumico: 0, reassign: 0, nudges: 0, blocks: 0, idasEntrega: 0 }; porEnt.set(n, x); }
+    if (!x) { x = { nome: n, idlefree: 0, stationary: 0, demoraAceitar: 0, demoraSair: 0, willlate: 0, sumico: 0, reassign: 0, nudges: 0, blocks: 0, idasEntrega: 0, acceptSecs: [], departSecs: [], returnSecs: [], timings: [] }; porEnt.set(n, x); }
     return x;
   };
   const totaisAlerta = {};
@@ -2261,6 +2318,16 @@ function analisarComportamento(dateArg, days) {
     } else if (e.type === 'auto_nudge')   getEnt(nome).nudges++;
     else if (e.type === 'auto_block')      getEnt(nome).blocks++;
     else if (e.type === 'status_change' && e.to === 'delivering') getEnt(nome).idasEntrega++;
+    else if (e.type === 'order_timing' && typeof e.secs === 'number') {
+      const x = getEnt(nome);
+      if (e.metric === 'accept')      x.acceptSecs.push(e.secs);
+      else if (e.metric === 'depart') x.departSecs.push(e.secs);
+      x.timings.push({ metric: e.metric, num: e.num, secs: e.secs, t: e.timestamp });
+    } else if (e.type === 'return_timing' && typeof e.secs === 'number') {
+      const x = getEnt(nome);
+      x.returnSecs.push(e.secs);
+      x.timings.push({ metric: 'return', num: e.num, secs: e.secs, t: e.timestamp });
+    }
     else if (e.type === 'snapshot' || e.type === 'auto_dispatch') {
       const ready = e.ready != null ? e.ready : 0;
       const free  = e.free != null ? e.free : (e.online != null && e.busy != null ? e.online - e.busy : null);
@@ -2273,6 +2340,9 @@ function analisarComportamento(dateArg, days) {
 
   for (const x of porEnt.values()) {
     x.score = x.idlefree * 3 + x.stationary * 2 + x.demoraAceitar * 2 + x.demoraSair * 2 + x.willlate * 2 + x.sumico * 4 + x.blocks * 1;
+    x.acceptAvg = avgSecs(x.acceptSecs); x.acceptMax = maxSecs(x.acceptSecs);
+    x.departAvg = avgSecs(x.departSecs); x.departMax = maxSecs(x.departSecs);
+    x.returnAvg = avgSecs(x.returnSecs); x.returnMax = maxSecs(x.returnSecs);
   }
   const ranking = [...porEnt.values()].filter(x => x.nome !== '—').sort((a, b) => b.score - a.score);
 
@@ -2344,6 +2414,41 @@ function analisarComportamento(dateArg, days) {
     }
   }
   L.push('');
+  L.push('### ⏱️ Tempos medidos (média · pior · nº de medições)');
+  const comTempo = ranking.filter(x => x.acceptSecs.length || x.departSecs.length || x.returnSecs.length);
+  if (!comTempo.length) {
+    L.push('_Sem tempos medidos no período (a medição começa a acumular a partir do deploy desta versão)._');
+  } else {
+    L.push('| Entregador | Pra aceite | Aceite→saída | Retorno (2km) |');
+    L.push('|---|---|---|---|');
+    for (const x of comTempo) {
+      L.push('| ' + x.nome +
+        ' | ' + fmtSecs(x.acceptAvg) + ' / ' + fmtSecs(x.acceptMax) + ' · ' + x.acceptSecs.length + 'x' +
+        ' | ' + fmtSecs(x.departAvg) + ' / ' + fmtSecs(x.departMax) + ' · ' + x.departSecs.length + 'x' +
+        ' | ' + fmtSecs(x.returnAvg) + ' / ' + fmtSecs(x.returnMax) + ' · ' + x.returnSecs.length + 'x |');
+    }
+    L.push('');
+    L.push('_Em m:ss. **Pra aceite** = recebeu→aceitou · **Aceite→saída** = aceitou→saiu da loja (status ou GPS) · **Retorno** = fim da última entrega→entrar no raio de 2km da loja._');
+  }
+
+  if (courierFilter) {
+    const alvo = [...porEnt.values()].find(x => x.nome.toLowerCase() === courierFilter.toLowerCase());
+    L.push('');
+    L.push('### 🔍 Caso isolado — ' + courierFilter);
+    if (!alvo || !alvo.timings.length) {
+      L.push('_Sem medições de tempo pra "' + courierFilter + '" no período._');
+    } else {
+      const label = { accept: 'pra aceite', depart: 'aceite→saída', return: 'retorno 2km' };
+      L.push('| Hora | Pedido | Medição | Tempo |');
+      L.push('|---|---|---|---|');
+      for (const tm of alvo.timings.slice().sort((a, b) => (a.t || '').localeCompare(b.t || ''))) {
+        const hh = tm.t ? String(horaBRT(tm.t)).padStart(2, '0') + ':' + String(new Date(tm.t).getUTCMinutes()).padStart(2, '0') : '–';
+        L.push('| ' + hh + ' | ' + (tm.num != null ? '#' + tm.num : '–') + ' | ' + (label[tm.metric] || tm.metric) + ' | ' + fmtSecs(tm.secs) + ' |');
+      }
+    }
+  }
+
+  L.push('');
   L.push('### 📈 Totais do período');
   const tt = Object.entries(totaisAlerta).map(([k, v]) => k + ' ' + v).join(' · ');
   L.push('`' + (tt || 'sem alertas') + '`');
@@ -2358,8 +2463,9 @@ app.get('/api/relatorio', (req, res) => {
   if (!isAdmin(req)) return res.status(401).json({ ok: false, erro: 'só admin master' });
   const date = req.query.date || operationalDate();
   const days = req.query.days ? Math.min(Math.max(parseInt(req.query.days) || 1, 1), 365) : 1;
+  const courier = (req.query.courier || '').trim() || null;
   try {
-    const r = analisarComportamento(date, days);
+    const r = analisarComportamento(date, days, courier);
     res.json({ ok: true, ...r });
   } catch (e) {
     console.error('[RELATORIO]', e.message);
