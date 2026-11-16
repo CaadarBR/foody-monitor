@@ -853,10 +853,12 @@ function courierDepartedStore(name) {
 //   depart → tempo aceite→saída = accepted → saiu da loja (status onGoing OU GPS fora do raio)
 // Grava em order_timing nos logs do dia; idempotente (1x cada marco por pedido). Se o pedido troca
 // de dono, reinicia o ciclo. (feature 15/11/2026)
-function recordOrderTiming(key, status, courier, num, now, departed) {
+function recordOrderTiming(key, o, courier, now, departed) {
+  const status = o.status;
+  const num = orderNumberOf(o);
   let mk = orderMarks.get(key);
   if (!mk || mk.courier !== courier) {
-    mk = { courier, num, dispatchedAt: null, acceptedAt: null, acceptLogged: false, departLogged: false };
+    mk = { courier, num, dispatchedAt: null, acceptedAt: null, departedAt: null, acceptLogged: false, departLogged: false, deliverLogged: false };
     orderMarks.set(key, mk);
   }
   if (num != null) mk.num = num;
@@ -872,6 +874,14 @@ function recordOrderTiming(key, status, courier, num, now, departed) {
   if (saiu && !mk.departLogged && mk.acceptedAt != null) {
     appendLog({ type: 'order_timing', metric: 'depart', courierName: courier, num: mk.num, secs: Math.round((now - mk.acceptedAt) / 1000) });
     mk.departLogged = true;
+    mk.departedAt = now;   // marca da saída → base pro "tempo de entrega"
+  }
+  // Tempo de ENTREGA: saiu da loja → pedido marcado "delivered" (usa deliveryDate do Foody, senão o 'now' do poll).
+  if (status === 'delivered' && !mk.deliverLogged && mk.departedAt != null) {
+    let end = now;
+    if (o.deliveryDate) { const dd = new Date(o.deliveryDate).getTime(); if (isFinite(dd)) end = Math.min(dd, now); }
+    appendLog({ type: 'order_timing', metric: 'deliver', courierName: courier, num: mk.num, secs: Math.max(0, Math.round((end - mk.departedAt) / 1000)) });
+    mk.deliverLogged = true;
   }
 }
 
@@ -892,7 +902,7 @@ function trackOrderStages(ordersByCourierList) {
       const key = o.uid || o.id;
       if (key == null) continue;
       seen.add(key);
-      recordOrderTiming(key, o.status, courier, orderNumberOf(o), now, courierDepartedStore(courier));
+      recordOrderTiming(key, o, courier, now, courierDepartedStore(courier));
       const prev = orderStageSince.get(key);
       if (!prev || prev.status !== o.status) {
         resolveStageAlert(prev, now); // etapa anterior terminou → congela o cronômetro
@@ -2291,7 +2301,7 @@ function analisarComportamento(dateArg, days, courierFilter) {
   const porEnt = new Map();
   const getEnt = (n) => {
     let x = porEnt.get(n);
-    if (!x) { x = { nome: n, idlefree: 0, stationary: 0, demoraAceitar: 0, demoraSair: 0, willlate: 0, sumico: 0, reassign: 0, nudges: 0, blocks: 0, idasEntrega: 0, acceptSecs: [], departSecs: [], returnSecs: [], timings: [] }; porEnt.set(n, x); }
+    if (!x) { x = { nome: n, idlefree: 0, stationary: 0, demoraAceitar: 0, demoraSair: 0, willlate: 0, sumico: 0, reassign: 0, nudges: 0, blocks: 0, idasEntrega: 0, acceptSecs: [], departSecs: [], deliverSecs: [], returnSecs: [], timings: [] }; porEnt.set(n, x); }
     return x;
   };
   const totaisAlerta = {};
@@ -2322,8 +2332,9 @@ function analisarComportamento(dateArg, days, courierFilter) {
     else if (e.type === 'status_change' && e.to === 'delivering') getEnt(nome).idasEntrega++;
     else if (e.type === 'order_timing' && typeof e.secs === 'number') {
       const x = getEnt(nome);
-      if (e.metric === 'accept')      x.acceptSecs.push(e.secs);
-      else if (e.metric === 'depart') x.departSecs.push(e.secs);
+      if (e.metric === 'accept')       x.acceptSecs.push(e.secs);
+      else if (e.metric === 'depart')  x.departSecs.push(e.secs);
+      else if (e.metric === 'deliver') x.deliverSecs.push(e.secs);
       x.timings.push({ metric: e.metric, num: e.num, secs: e.secs, t: e.timestamp });
     } else if (e.type === 'return_timing' && typeof e.secs === 'number') {
       const x = getEnt(nome);
@@ -2342,9 +2353,10 @@ function analisarComportamento(dateArg, days, courierFilter) {
 
   for (const x of porEnt.values()) {
     x.score = x.idlefree * 3 + x.stationary * 2 + x.demoraAceitar * 2 + x.demoraSair * 2 + x.willlate * 2 + x.sumico * 4 + x.blocks * 1;
-    x.acceptAvg = avgSecs(x.acceptSecs); x.acceptMax = maxSecs(x.acceptSecs);
-    x.departAvg = avgSecs(x.departSecs); x.departMax = maxSecs(x.departSecs);
-    x.returnAvg = avgSecs(x.returnSecs); x.returnMax = maxSecs(x.returnSecs);
+    x.acceptAvg = avgSecs(x.acceptSecs);   x.acceptMax = maxSecs(x.acceptSecs);
+    x.departAvg = avgSecs(x.departSecs);   x.departMax = maxSecs(x.departSecs);
+    x.deliverAvg = avgSecs(x.deliverSecs); x.deliverMax = maxSecs(x.deliverSecs);
+    x.returnAvg = avgSecs(x.returnSecs);   x.returnMax = maxSecs(x.returnSecs);
   }
   const ranking = [...porEnt.values()].filter(x => x.nome !== '—').sort((a, b) => b.score - a.score);
 
@@ -2417,20 +2429,21 @@ function analisarComportamento(dateArg, days, courierFilter) {
   }
   L.push('');
   L.push('### ⏱️ Tempos medidos (média · pior · nº de medições)');
-  const comTempo = ranking.filter(x => x.acceptSecs.length || x.departSecs.length || x.returnSecs.length);
+  const comTempo = ranking.filter(x => x.acceptSecs.length || x.departSecs.length || x.deliverSecs.length || x.returnSecs.length);
   if (!comTempo.length) {
     L.push('_Sem tempos medidos no período (a medição começa a acumular a partir do deploy desta versão)._');
   } else {
-    L.push('| Entregador | Pra aceite | Aceite→saída | Retorno (2km) |');
-    L.push('|---|---|---|---|');
+    L.push('| Entregador | Pra aceite | Aceite→saída | Entrega | Retorno (2km) |');
+    L.push('|---|---|---|---|---|');
     for (const x of comTempo) {
       L.push('| ' + x.nome +
         ' | ' + fmtSecs(x.acceptAvg) + ' / ' + fmtSecs(x.acceptMax) + ' · ' + x.acceptSecs.length + 'x' +
         ' | ' + fmtSecs(x.departAvg) + ' / ' + fmtSecs(x.departMax) + ' · ' + x.departSecs.length + 'x' +
+        ' | ' + fmtSecs(x.deliverAvg) + ' / ' + fmtSecs(x.deliverMax) + ' · ' + x.deliverSecs.length + 'x' +
         ' | ' + fmtSecs(x.returnAvg) + ' / ' + fmtSecs(x.returnMax) + ' · ' + x.returnSecs.length + 'x |');
     }
     L.push('');
-    L.push('_Em m:ss. **Pra aceite** = recebeu→aceitou · **Aceite→saída** = aceitou→saiu da loja (status ou GPS) · **Retorno** = fim da última entrega→entrar no raio de 2km da loja._');
+    L.push('_Em m:ss (média / pior · nº). **Pra aceite** = recebeu→aceitou · **Aceite→saída** = aceitou→saiu da loja · **Entrega** = saiu da loja→marcou entregue · **Retorno** = fim da última entrega→entrar no raio de 2km da loja._');
   }
 
   if (courierFilter) {
@@ -2440,7 +2453,7 @@ function analisarComportamento(dateArg, days, courierFilter) {
     if (!alvo || !alvo.timings.length) {
       L.push('_Sem medições de tempo pra "' + courierFilter + '" no período._');
     } else {
-      const label = { accept: 'pra aceite', depart: 'aceite→saída', return: 'retorno 2km' };
+      const label = { accept: 'pra aceite', depart: 'aceite→saída', deliver: 'entrega', return: 'retorno 2km' };
       L.push('| Hora | Pedido | Medição | Tempo |');
       L.push('|---|---|---|---|');
       for (const tm of alvo.timings.slice().sort((a, b) => (a.t || '').localeCompare(b.t || ''))) {
