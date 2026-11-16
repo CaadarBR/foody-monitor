@@ -1794,7 +1794,9 @@ function buildStatePayload() {
     shiftClosing,
     storeOpen: isStoreOpenNowBRT(),
     alertMinutes:     config.alertMinutes,
-    couriers:         [...courierMap.values()],
+    // parkedAtStore: o PONTO em que ele está parado é na loja? Aí o selo vira "aguardando" (cinza)
+    // em vez de "parado" (laranja) — parado na loja é entregador esperando pedido, não é problema.
+    couriers:         [...courierMap.values()].map(c => ({ ...c, parkedAtStore: isAtStore(c.stLat, c.stLng) })),
     courierQueue:     courierQueue.map(q => q.name), // ordem da "Fila de Entregadores" do Foody
     alerts:           activeAlerts,
     holding:          buildHolding(),

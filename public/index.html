@@ -104,6 +104,7 @@
     .nogps { color: #eab308; font-weight: 600; }
     .gps-null { color: #eab308; font-size: 10px; font-weight: 700; opacity: 0.8; margin-left: 4px; }
     .parked-line { margin-top: 6px; font-size: 12px; font-weight: 700; color: #f97316; font-variant-numeric: tabular-nums; text-align: center; }
+    .parked-line.waiting { color: #94a3b8; font-weight: 600; } /* parado NA LOJA = aguardando, tom neutro (sem drama) */
     .banner-red  { background: rgba(239,68,68,0.12);  border: 1px solid rgba(239,68,68,0.4); }
 
     .btn-sm {
@@ -2180,7 +2181,9 @@ function renderCouriers() {
           <div class="timer ${cfg.timerClass}">${fmtDuration(timerMs)}</div>
           <div class="timer-label">${cfg.timerLabel}</div>
         </div>
-        ${showParked ? `<div class="parked-line">📍 parado há ${fmtDuration(parkedMs)}</div>` : ''}
+        ${showParked ? (c.parkedAtStore
+          ? `<div class="parked-line waiting">⏳ aguardando há ${fmtDuration(parkedMs)}</div>`
+          : `<div class="parked-line">📍 parado há ${fmtDuration(parkedMs)}</div>`) : ''}
         ${heldHtml}
         <div class="card-footer">
           <span>online desde ${new Date(c.onlineAt || c.statusSince).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}</span>
