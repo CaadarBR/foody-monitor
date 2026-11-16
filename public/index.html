@@ -585,6 +585,7 @@
     <button class="btn-icon" onclick="openLog()" title="Histórico do turno">📋</button>
     <button class="btn-icon" onclick="openPermanencia()" title="Pontos de Permanência">📍</button>
     <button class="btn-icon" onclick="openQuemFez()" title="Quem fez um pedido">🔎</button>
+    <button class="btn-icon" id="mapBtn" style="display:none" title="Meu mapa (privado)">🗺️</button>
     <button class="btn-icon" onclick="openSettings()" title="Configurações">⚙️</button>
   </div>
 </header>
@@ -1522,6 +1523,23 @@ function updateCornerLoginBtn() {
   const btn = document.getElementById('cornerLoginBtn');
   btn.classList.toggle('unlocked', isAdminUnlocked);
   btn.title = isAdminUnlocked ? 'Logado como ADM MASTER' : 'Login ADM MASTER';
+  ensureMapBtn();
+}
+
+// Botão do MAPA PRIVADO no topo — só aparece pro John (admin logado). Pega o link secreto
+// (/m/<token>) do /api/admin/access e abre em nova aba. O John fixa no favorito e pronto.
+let mapLinkCache = null;
+async function ensureMapBtn() {
+  const btn = document.getElementById('mapBtn');
+  if (!btn) return;
+  if (!isAdminUnlocked) { btn.style.display = 'none'; return; }
+  if (!mapLinkCache) {
+    try {
+      const a = await fetch('/api/admin/access', { headers: { 'x-admin-password': adminPass } }).then(r => r.json());
+      if (a && a.mapLink) mapLinkCache = a.mapLink;
+    } catch (e) {}
+  }
+  if (mapLinkCache) { btn.style.display = ''; btn.onclick = () => window.open(mapLinkCache, '_blank'); }
 }
 
 async function renderSettingsGate() {

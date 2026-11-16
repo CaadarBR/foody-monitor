@@ -90,6 +90,7 @@ let config = {
   // whatsapp: espelha esse aviso também no zap do entregador (off por padrão).
   willLate: { enabled: true, whatsapp: false, notAcceptedMin: 5, slaLeftMin: 10, text: '⚠️ {PEDIDO} está perto do prazo de entrega — 10min para o pedido atrasar' },
   zones: [],            // cercas virtuais: [{ id, name, polygon: [[lat,lng],...] }]
+  mapToken: '',         // token do LINK PRIVADO do mapa (só o John). Gerado 1x no load; libera só leitura.
 };
 
 function loadConfig() {
@@ -115,7 +116,14 @@ function loadConfig() {
       if (saved.whatsappNotify && typeof saved.whatsappNotify === 'object') config.whatsappNotify = { ...config.whatsappNotify, ...saved.whatsappNotify };
       if (saved.willLate && typeof saved.willLate === 'object') config.willLate = { ...config.willLate, ...saved.willLate };
       if (Array.isArray(saved.zones)) config.zones = saved.zones;
+      if (saved.mapToken) config.mapToken = saved.mapToken;
     } catch (e) {}
+  }
+  // Link privado do mapa: gera um token aleatório 1x (persiste). Só o John tem o link.
+  if (!config.mapToken) {
+    try { config.mapToken = require('crypto').randomUUID().replace(/-/g, ''); }
+    catch (e) { config.mapToken = 'm' + Date.now().toString(36) + Math.round(1e9 * Math.random()).toString(36); }
+    saveConfig();
   }
   // Migra a config antiga (só "App Desconectado" pra quem some) pro novo formato de mensagens
   if (config.autoNudgeMissing && !(config.autoMessages && config.autoMessages.missing)) {
@@ -1807,6 +1815,8 @@ function buildStatePayload() {
     // parkedAtStore: o PONTO em que ele está parado é na loja? Aí o selo vira "aguardando" (cinza)
     // em vez de "parado" (laranja) — parado na loja é entregador esperando pedido, não é problema.
     couriers:         [...courierMap.values()].map(c => ({ ...c, parkedAtStore: isAtStore(c.stLat, c.stLng) })),
+    store:            storeCoords(),        // coord da loja — pro mapa privado plotar a pizzaria + raio
+    returnRadiusM:    RETURN_RADIUS_M,      // raio "voltou" (2km) — desenhado no mapa
     courierQueue:     courierQueue.map(q => q.name), // ordem da "Fila de Entregadores" do Foody
     alerts:           activeAlerts,
     holding:          buildHolding(),
@@ -2019,11 +2029,23 @@ function ipAllowed(req) {
   return (config.allowedIps || []).includes(ip);
 }
 
-// Libera os dados do painel só pra IP liberado ou ADM MASTER logado.
+// Token do link PRIVADO do mapa (só leitura dos dados ao vivo). Vem na query ?k= ou no header.
+function validMapToken(req) {
+  const t = req.query.k || req.headers['x-map-token'];
+  return !!config.mapToken && t === config.mapToken;
+}
+
+// Libera os dados do painel só pra IP liberado, ADM MASTER logado, ou quem tem o link privado do mapa.
 // Todo mundo abre o site — o que muda é se os dados aparecem ou não.
 function hasDataAccess(req) {
-  return ipAllowed(req) || isAdmin(req);
+  return ipAllowed(req) || isAdmin(req) || validMapToken(req);
 }
+
+// Página do MAPA privado (só pra quem tem o link com o token certo). Serve o HTML dedicado.
+app.get('/m/:token', (req, res) => {
+  if (!config.mapToken || req.params.token !== config.mapToken) return res.status(404).send('não encontrado');
+  res.sendFile(path.join(__dirname, 'public', 'mapa.html'));
+});
 
 app.post('/config', (req, res) => {
   if (config.adminPassword && !isAdmin(req)) {
@@ -2072,6 +2094,7 @@ app.get('/api/admin/access', (req, res) => {
     shiftEndMessage: config.shiftEndMessage || { enabled: false, notifyOwner: true, text: '' },
     whatsappNotify: config.whatsappNotify || { enabled: false },
     willLate:       config.willLate || { enabled: true, whatsapp: false, notAcceptedMin: 5, slaLeftMin: 10, text: '' },
+    mapLink:        config.mapToken ? ('/m/' + config.mapToken) : null,  // link PRIVADO do mapa (só John)
     autoShiftPending: {
       phase:        autoShiftState.phase,
       count:        (autoShiftState.list || []).length,
