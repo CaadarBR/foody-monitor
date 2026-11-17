@@ -90,9 +90,13 @@
     const STORE_DEFAULT = [-9.533908716397399, -35.77956519016071];
 
     const map = L.map('map', { zoomControl: true, attributionControl: true }).setView(STORE_DEFAULT, 14);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      subdomains: 'abcd', maxZoom: 20,
-      attribution: '&copy; OpenStreetMap &copy; CARTO'
+    // Esri Dark Gray Canvas — mapa escuro NATIVO, sem API key (o CARTO passou a exigir chave paga).
+    // Base (fundo + ruas) + Reference (nomes das quadras). Esri usa {z}/{y}/{x}.
+    L.tileLayer('https://services.arcgisonline.com/arcgis/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 19, maxNativeZoom: 16, attribution: '&copy; Esri'
+    }).addTo(map);
+    L.tileLayer('https://services.arcgisonline.com/arcgis/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 19, maxNativeZoom: 16
     }).addTo(map);
 
     let storeMarker = null, storeCircle = null, centeredOnce = false, lastCouriers = [];
